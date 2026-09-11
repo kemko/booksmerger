@@ -57,6 +57,6 @@ def parse_args(argv: Sequence[str] | None = None) -> Command:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Validate CLI input; assembling the EPUB is added by the pipeline task."""
+    """Validate CLI input; downloading is performed by the assembly pipeline."""
     parse_args(argv)
     return 0
