@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bookmerger"
+version = "0.1.0"
+description = "Build an EPUB collection from FB2 and EPUB sources"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx==0.28.1",
+  "lxml==6.1.0",
+  "tinycss2==1.4.0",
+]
+
+[project.scripts]
+bookmerger = "bookmerger.cli:main"
+
+[dependency-groups]
+dev = [
+  "EbookLib==0.20",
+  "pytest==9.0.3",
+  "pytest-cov==6.0.0",
+  "ruff==0.9.10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+branch = true
+source = ["bookmerger"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/conftest.py" = ["E501", "UP012"]
