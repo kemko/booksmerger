@@ -14,7 +14,7 @@ PNG = base64.b64decode(
 
 @pytest.fixture
 def epub_factory(tmp_path: Path):
-    def make(version: int) -> Path:
+    def make(version: int, *, svg_cover: bool = False) -> Path:
         book = tmp_path / f"book{version}.epub"
         root = "OEBPS"
         navigation = (
@@ -38,6 +38,9 @@ def epub_factory(tmp_path: Path):
                 f"-{version}</dc:identifier><dc:title>Fixture {version}</dc:title>"
                 f'<dc:creator id="author">Author {version}</dc:creator>'
                 f'<dc:contributor id="translator">Translator {version}</dc:contributor>'
+                f"<dc:language>{'ru' if version == 2 else 'en'}</dc:language>"
+                "<dc:subject>Shared subject</dc:subject><dc:publisher>Fixture Press</dc:publisher>"
+                f"<dc:rights>Rights {version}</dc:rights>"
                 '<meta refines="#author" property="role" scheme="marc:relators">aut</meta>'
                 '<meta refines="#translator" property="role" scheme="marc:relators">trl</meta>'
                 "</metadata><manifest>"
@@ -80,9 +83,27 @@ def epub_factory(tmp_path: Path):
                 '<html xmlns="http://www.w3.org/1999/xhtml"><body><nav epub:type="toc" '
                 'xmlns:epub="http://www.idpf.org/2007/ops"><ol><li><a href="text/chapter.xhtml">Chapter</a>'
                 '<ol><li><a href="text/chapter.xhtml#note">Note</a></li></ol></li></ol>'
-                "</nav></body></html>"
+                '</nav><nav epub:type="page-list" xmlns:epub="http://www.idpf.org/2007/ops">'
+                '<ol><li><a href="text/chapter.xhtml#page-1">1</a></li></ol></nav>'
+                '<nav epub:type="landmarks" xmlns:epub="http://www.idpf.org/2007/ops">'
+                '<ol><li><a href="text/chapter.xhtml">Start</a></li></ol></nav></body></html>'
             ).encode(),
         }
+        if svg_cover:
+            package = entries[f"{root}/content.opf"]
+            package = package.replace(
+                b'id="cover" href="images/cover.png" media-type="image/png" properties="cover-image"',
+                b'id="cover-raster" href="images/cover.png" media-type="image/png"',
+            ).replace(
+                b'<item id="diagram"',
+                b'<item id="cover" href="images/cover.svg" media-type="image/svg+xml" '
+                b'properties="cover-image"/><item id="diagram"',
+            )
+            entries[f"{root}/content.opf"] = package
+            entries[f"{root}/images/cover.svg"] = (
+                b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">'
+                b"<text>Cover</text></svg>"
+            )
         with zipfile.ZipFile(book, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for name, data in entries.items():
                 archive.writestr(name, data)

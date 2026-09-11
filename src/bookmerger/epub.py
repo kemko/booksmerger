@@ -12,6 +12,7 @@ from bookmerger.references import ResourceMap, rewrite_css, rewrite_xml
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
+DC_NS = "http://purl.org/dc/elements/1.1/"
 
 
 class EpubError(RuntimeError):
@@ -34,11 +35,36 @@ class SpineItem:
 
 
 @dataclass(frozen=True)
+class Contributor:
+    """A named EPUB contributor and its MARC relator role."""
+
+    name: str
+    role: str
+    identifier: str | None = None
+
+
+@dataclass(frozen=True)
+class BookMetadata:
+    """Metadata retained from a source package for collection front matter."""
+
+    title: str
+    contributors: tuple[Contributor, ...]
+    languages: tuple[str, ...]
+    subjects: tuple[str, ...]
+    publisher: str | None
+    identifiers: tuple[str, ...]
+    rights: tuple[str, ...]
+    details: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
 class EpubPackage:
     opf_path: str
     manifest: tuple[ManifestItem, ...]
     spine: tuple[SpineItem, ...]
     navigation: tuple[str, ...]
+    metadata: BookMetadata
+    cover: str | None
 
 
 @dataclass(frozen=True)
@@ -71,6 +97,50 @@ def _rootfile(archive: zipfile.ZipFile) -> str:
 
 def _parts(value: str | None) -> tuple[str, ...]:
     return tuple((value or "").split())
+
+
+def _text_items(metadata: etree._Element, name: str) -> tuple[str, ...]:
+    return tuple(
+        text
+        for item in metadata.findall(f"{{{DC_NS}}}{name}")
+        if (text := "".join(item.itertext()).strip())
+    )
+
+
+def _metadata(root: etree._Element) -> BookMetadata:
+    node = root.find(f"{{{OPF_NS}}}metadata")
+    if node is None:
+        raise EpubError("OPF has no metadata")
+    roles = {
+        item.get("refines", "").removeprefix("#"): "".join(item.itertext()).strip()
+        for item in node.findall(f"{{{OPF_NS}}}meta")
+        if item.get("property") == "role" and item.get("refines")
+    }
+    contributors: list[Contributor] = []
+    for name in ("creator", "contributor"):
+        for item in node.findall(f"{{{DC_NS}}}{name}"):
+            value = "".join(item.itertext()).strip()
+            if value:
+                role = roles.get(item.get("id", "")) or item.get(f"{{{OPF_NS}}}role")
+                default_role = "aut" if name == "creator" else "oth"
+                contributors.append(Contributor(value, role or default_role, item.get("id")))
+    titles = _text_items(node, "title")
+    details = tuple(
+        (item.get("property", etree.QName(item).localname), "".join(item.itertext()).strip())
+        for item in node
+        if "".join(item.itertext()).strip()
+        and not (item.tag == f"{{{OPF_NS}}}meta" and item.get("property") == "role")
+    )
+    return BookMetadata(
+        titles[0] if titles else "Untitled",
+        tuple(contributors),
+        _text_items(node, "language"),
+        _text_items(node, "subject"),
+        next(iter(_text_items(node, "publisher")), None),
+        _text_items(node, "identifier"),
+        _text_items(node, "rights"),
+        details,
+    )
 
 
 def read_package(path: Path) -> EpubPackage:
@@ -112,7 +182,20 @@ def read_package(path: Path) -> EpubPackage:
         for item in manifest
         if "nav" in item.properties or item.media_type == "application/x-dtbncx+xml"
     )
-    return EpubPackage(opf_path, manifest, spine, navigation)
+    metadata = _metadata(root)
+    cover_id = next(
+        (
+            item.get("content")
+            for item in root.findall(f".//{{{OPF_NS}}}meta")
+            if item.get("name") == "cover"
+        ),
+        None,
+    )
+    cover = next(
+        (item.href for item in manifest if "cover-image" in item.properties or item.id == cover_id),
+        None,
+    )
+    return EpubPackage(opf_path, manifest, spine, navigation, metadata, cover)
 
 
 def _xml_type(name: str) -> bool:
@@ -162,6 +245,8 @@ def stage_epub(path: Path, directory: Path, number: int) -> StagedBook:
             SpineItem(unique[item.idref], item.linear, item.properties) for item in package.spine
         ),
         tuple(mapping.resources[_item_path(package, href)] for href in package.navigation),
+        package.metadata,
+        mapping.resources[_item_path(package, package.cover)] if package.cover else None,
     )
     return StagedBook(number, prefix, staged_package, mapping)
 
