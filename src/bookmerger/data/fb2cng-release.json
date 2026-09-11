@@ -1,0 +1,11 @@
+{
+  "version": "1.7.0",
+  "assets": {
+    "darwin-amd64": {"url": "https://github.com/rupor-github/fb2cng/releases/download/v1.7.0/fbc-darwin-amd64.zip", "sha256": "97726130ec3cf4127736c1d9f064a0d643d96e98f970d2cee953ec21f65809bf"},
+    "darwin-arm64": {"url": "https://github.com/rupor-github/fb2cng/releases/download/v1.7.0/fbc-darwin-arm64.zip", "sha256": "a1f1a5307c80e490cff1f517cbf13c815f7405381601c2920cf433baff69ed33"},
+    "linux-amd64": {"url": "https://github.com/rupor-github/fb2cng/releases/download/v1.7.0/fbc-linux-amd64.zip", "sha256": "4b7527a7e111b3fa86088d663dc7fb196b1d13c9ce475e83dd49b83098cf1bfc"},
+    "linux-arm64": {"url": "https://github.com/rupor-github/fb2cng/releases/download/v1.7.0/fbc-linux-arm64.zip", "sha256": "11a527948b10ecb352665fa9c1a51f1ca3afb3fb8c4b86461a9e86129d8130c7"},
+    "windows-amd64": {"url": "https://github.com/rupor-github/fb2cng/releases/download/v1.7.0/fbc-windows-amd64.zip", "sha256": "7db9c70d6b1742c0b80d6da718345e7fb55e16fd7b2d3b892501eb897395cfa3"},
+    "windows-arm64": {"url": "https://github.com/rupor-github/fb2cng/releases/download/v1.7.0/fbc-windows-arm64.zip", "sha256": "976ad0a46e1e12c4f8da09c43391a995e3dd1b125e4c3b6ca657856c842f98ab"}
+  }
+}

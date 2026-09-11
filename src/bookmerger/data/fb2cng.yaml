@@ -1,0 +1,15 @@
+version: 1
+document:
+  toc_type: normal
+  images:
+    scale_factor: 1.0
+    optimize: false
+    cover:
+      generate: false
+      resize: none
+  footnotes:
+    mode: default
+  annotation:
+    enable: true
+  toc_page:
+    placement: none
