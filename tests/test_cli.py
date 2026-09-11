@@ -15,13 +15,6 @@ def test_positional_urls_keep_order_and_duplicates() -> None:
     assert command == Command("Collection", Path("collection.epub"), ("one", "two", "one"), False)
 
 
-def test_main_accepts_valid_command() -> None:
-    assert (
-        main(["--title", "Collection", "--output", "collection.epub", "https://example.test/book"])
-        == 0
-    )
-
-
 def test_input_file_keeps_order_and_duplicates(tmp_path: Path) -> None:
     sources = tmp_path / "sources.txt"
     sources.write_text(
@@ -33,6 +26,23 @@ def test_input_file_keeps_order_and_duplicates(tmp_path: Path) -> None:
     )
 
     assert command.sources == ("https://example.test/a.fb2", "https://example.test/a.fb2")
+
+
+def test_main_reports_short_progress(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_assemble(command: Command, *, progress, **_: object) -> Path:
+        assert command.title == "Collection"
+        progress("Downloading sources")
+        return command.output
+
+    monkeypatch.setattr("bookmerger.cli.assemble", fake_assemble)
+
+    assert (
+        main(["--title", "Collection", "--output", "collection.epub", "https://example.test/book"])
+        == 0
+    )
+    assert "Downloading sources" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

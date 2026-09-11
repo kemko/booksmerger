@@ -61,14 +61,13 @@ def test_builds_navigation_front_matter_and_merged_metadata(epub_factory, tmp_pa
 
     nav = etree.fromstring((directory / "EPUB" / "nav.xhtml").read_bytes())
     toc = nav.xpath("//x:nav[@epub:type='toc']", namespaces={"x": XHTML, "epub": EPUB})
-    assert toc[0].xpath(".//x:a/text()", namespaces={"x": XHTML}) == [
+    links = toc[0].xpath(".//x:a/text()", namespaces={"x": XHTML})
+    assert links[:3] == [
         "Fixture 2",
         "Chapter",
         "Note",
-        "Fixture 3",
-        "Chapter",
-        "Note",
     ]
+    assert "Supplementary content" in links and "Original contents" in links
     assert toc[0].xpath(".//x:a/@href", namespaces={"x": XHTML})[1] == (
         "../books/0001/OEBPS/text/chapter.xhtml"
     )

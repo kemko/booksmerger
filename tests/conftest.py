@@ -56,14 +56,14 @@ def epub_factory(tmp_path: Path):
             ).encode(),
             f"{root}/text/chapter.xhtml": (
                 '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml">'
-                '<head><link rel="stylesheet" href="../styles/book.css"/></head><body><section id="same-id">'
-                '<h1>Chapter</h1><p>Text <a id="back" href="#note">1</a>.</p><aside id="note">'
+                '<head><title>Chapter</title><link rel="stylesheet" href="../styles/book.css"/></head><body><section id="same-id">'
+                '<h1>Chapter</h1><p id="page-1">Text <a id="back" href="#note">1</a>.</p><aside id="note">'
                 '<a href="#back">Return</a></aside><img src="../images/cover.png" alt="cover"/>'
                 '<img src="../images/diagram.svg" alt="diagram"/></section></body></html>'
             ).encode(),
             f"{root}/styles/book.css": b"p { color: navy; }",
             f"{root}/text/appendix.xhtml": (
-                '<html xmlns="http://www.w3.org/1999/xhtml"><body><p id="end">Appendix</p>'
+                '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Appendix</title></head><body><p id="end">Appendix</p>'
                 '<audio src="../media/audio.mp3"/></body></html>'
             ).encode(),
             f"{root}/fonts/reader.woff2": b"ordinary-font-bytes",
@@ -80,13 +80,13 @@ def epub_factory(tmp_path: Path):
                 "</navPoint></navPoint></navMap></ncx>"
             ).encode(),
             f"{root}/nav.xhtml": (
-                '<html xmlns="http://www.w3.org/1999/xhtml"><body><nav epub:type="toc" '
+                '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Contents</title></head><body><nav epub:type="toc" '
                 'xmlns:epub="http://www.idpf.org/2007/ops"><ol><li><a href="text/chapter.xhtml">Chapter</a>'
                 '<ol><li><a href="text/chapter.xhtml#note">Note</a></li></ol></li></ol>'
                 '</nav><nav epub:type="page-list" xmlns:epub="http://www.idpf.org/2007/ops">'
                 '<ol><li><a href="text/chapter.xhtml#page-1">1</a></li></ol></nav>'
                 '<nav epub:type="landmarks" xmlns:epub="http://www.idpf.org/2007/ops">'
-                '<ol><li><a href="text/chapter.xhtml">Start</a></li></ol></nav></body></html>'
+                '<ol><li><a href="text/chapter.xhtml" epub:type="bodymatter">Start</a></li></ol></nav></body></html>'
             ).encode(),
         }
         if svg_cover:

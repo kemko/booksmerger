@@ -154,9 +154,12 @@ def _auxiliary_navigation(
     etree.SubElement(nav, f"{{{XHTML_NS}}}h2").text = nav_type.replace("-", " ").title()
     listing = etree.SubElement(nav, f"{{{XHTML_NS}}}ol")
     for book, tree in trees:
-        item = etree.SubElement(listing, f"{{{XHTML_NS}}}li")
-        item.text = book.package.metadata.title
-        _tree(item, tree)
+        for label, target, _ in tree:
+            item = etree.SubElement(listing, f"{{{XHTML_NS}}}li")
+            anchor = etree.SubElement(item, f"{{{XHTML_NS}}}a", href=target)
+            anchor.text = f"{book.package.metadata.title}: {label}"
+            if nav_type == "landmarks":
+                anchor.set(f"{{{EPUB_NS}}}type", "bodymatter")
 
 
 def _book_page(book: StagedBook, directory: Path) -> tuple[str, bool]:
@@ -268,14 +271,47 @@ def build_collection(
         tree = _navigation(book, directory)
         if tree:
             _tree(node, tree)
-        source_items.extend(book.package.manifest)
-        spine.extend(book.package.spine)
-        spine_ids = {item.idref for item in book.package.spine}
-        spine.extend(
-            SpineItem(item.id, False)
+        source_manifest = tuple(
+            ManifestItem(
+                item.id,
+                item.href,
+                item.media_type,
+                tuple(
+                    property
+                    for property in item.properties
+                    if property not in {"cover-image", "nav"}
+                ),
+            )
             for item in book.package.manifest
-            if item.href in book.package.navigation and item.id not in spine_ids
         )
+        source_items.extend(
+            item for item in source_manifest if item.media_type != "application/x-dtbncx+xml"
+        )
+        source_ids = {item.id for item in source_items}
+        spine.extend(item for item in book.package.spine if item.idref in source_ids)
+        extras = [
+            item
+            for item in source_manifest
+            if item.id in source_ids
+            and (
+                item.href in book.package.navigation
+                or item.id in {spine.idref for spine in book.package.spine if not spine.linear}
+            )
+        ]
+        if extras:
+            extra_list = next(iter(node.findall(f"{{{XHTML_NS}}}ol")), None)
+            if extra_list is None:
+                extra_list = etree.SubElement(node, f"{{{XHTML_NS}}}ol")
+            for item in extras:
+                extra = etree.SubElement(extra_list, f"{{{XHTML_NS}}}li")
+                link = etree.SubElement(extra, f"{{{XHTML_NS}}}a", href=_relative(item.href))
+                link.text = (
+                    "Original contents"
+                    if item.href in book.package.navigation
+                    else "Supplementary content"
+                )
+                if item.href in book.package.navigation:
+                    spine.append(SpineItem(item.id, False))
     _auxiliary_navigation(nav_body, books, directory, "page-list")
     _auxiliary_navigation(nav_body, books, directory, "landmarks")
     spine.append(SpineItem("bibliography", True))
@@ -305,7 +341,10 @@ def _write_opf(
     manifest: list[ManifestItem],
     spine: list[SpineItem],
 ) -> Path:
-    package = etree.Element(f"{{{OPF_NS}}}package", nsmap={None: OPF_NS, "dc": DC_NS})
+    package = etree.Element(
+        f"{{{OPF_NS}}}package",
+        nsmap={None: OPF_NS, "dc": DC_NS, "dcterms": "http://purl.org/dc/terms/"},
+    )
     package.set("version", "3.0")
     package.set("unique-identifier", "bookmerger-id")
     metadata = etree.SubElement(package, f"{{{OPF_NS}}}metadata")
@@ -313,6 +352,8 @@ def _write_opf(
     item.text = f"urn:uuid:{identifier}"
     etree.SubElement(metadata, f"{{{DC_NS}}}title").text = title
     etree.SubElement(metadata, f"{{{DC_NS}}}date").text = published.isoformat()
+    modified = etree.SubElement(metadata, f"{{{OPF_NS}}}meta", property="dcterms:modified")
+    modified.text = f"{published.isoformat()}T00:00:00Z"
     for language in languages:
         etree.SubElement(metadata, f"{{{DC_NS}}}language").text = language
     for subject in subjects:

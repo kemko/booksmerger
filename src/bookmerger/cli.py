@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+import os
+import sys
+import tempfile
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from bookmerger.collection import build_collection
+from bookmerger.converter import FB2Converter
+from bookmerger.download import Downloader
+from bookmerger.epub import stage_epub, write_epub
+from bookmerger.validate import ValidationError, validate_epub
 
 
 @dataclass(frozen=True)
@@ -16,6 +25,10 @@ class Command:
     output: Path
     sources: tuple[str, ...]
     overwrite: bool
+
+
+class BuildError(RuntimeError):
+    """The collection could not be built without risking the existing output."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,7 +69,71 @@ def parse_args(argv: Sequence[str] | None = None) -> Command:
     return Command(title, namespace.output, sources, namespace.overwrite)
 
 
+def assemble(
+    command: Command,
+    *,
+    downloader: Downloader | None = None,
+    converter: FB2Converter | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> Path:
+    """Build and atomically publish one validated collection EPUB."""
+    output = command.output
+    if output.exists() and not command.overwrite:
+        raise BuildError(f"output already exists: {output} (use --overwrite to replace it)")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    downloader = downloader or Downloader()
+    converter = converter or FB2Converter()
+    temporary: Path | None = None
+    try:
+        with tempfile.TemporaryDirectory(prefix=f".{output.stem}-", dir=output.parent) as work_name:
+            work = Path(work_name)
+            if progress:
+                progress("Downloading sources")
+            sources = downloader.download_all(command.sources, work / "sources")
+            converted: list[Path] = []
+            for number, source in enumerate(sources, 1):
+                if source.format == "epub":
+                    converted.append(source.path)
+                    continue
+                if progress:
+                    progress(f"Converting book {number}")
+                target = work / "converted" / f"book-{number:04d}.epub"
+                converter.convert(source.path, target)
+                converted.append(target)
+            if progress:
+                progress("Building collection")
+            staging = work / "staging"
+            books = tuple(
+                stage_epub(source, staging, number) for number, source in enumerate(converted, 1)
+            )
+            build_collection(command.title, books, staging)
+            descriptor, temp_name = tempfile.mkstemp(
+                prefix=f".{output.stem}-", suffix=".epub", dir=output.parent
+            )
+            os.close(descriptor)
+            temporary = Path(temp_name)
+            write_epub(staging, temporary)
+            validate_epub(temporary, staging)
+            if output.exists() and not command.overwrite:
+                raise BuildError(f"output already exists: {output} (use --overwrite to replace it)")
+            os.replace(temporary, output)
+            temporary = None
+    except (BuildError, ValidationError):
+        raise
+    except Exception as error:
+        raise BuildError(str(error)) from error
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return output
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Validate CLI input; downloading is performed by the assembly pipeline."""
-    parse_args(argv)
+    """Run the complete collection pipeline and print concise diagnostics."""
+    command = parse_args(argv)
+    try:
+        assemble(command, progress=lambda message: print(message, file=sys.stderr))
+    except BuildError as error:
+        print(f"bookmerger: {error}", file=sys.stderr)
+        return 1
     return 0

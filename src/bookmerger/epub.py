@@ -15,6 +15,36 @@ OPF_NS = "http://www.idpf.org/2007/opf"
 DC_NS = "http://purl.org/dc/elements/1.1/"
 
 
+def write_epub(directory: Path, output: Path) -> None:
+    """Write a deterministic EPUB container from a prepared directory."""
+    container = directory / "META-INF" / "container.xml"
+    container.parent.mkdir(parents=True, exist_ok=True)
+    container.write_bytes(
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<container version="1.0" '
+        b'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+        b'<rootfiles><rootfile full-path="EPUB/package.opf" '
+        b'media-type="application/oebps-package+xml"/>'
+        b"</rootfiles></container>"
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        mimetype = zipfile.ZipInfo("mimetype", date_time=(1980, 1, 1, 0, 0, 0))
+        mimetype.compress_type = zipfile.ZIP_STORED
+        mimetype.extra = b""
+        archive.writestr(mimetype, b"application/epub+zip")
+        for path in sorted(item for item in directory.rglob("*") if item.is_file()):
+            name = path.relative_to(directory).as_posix()
+            if name == "mimetype":
+                continue
+            entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.extra = b""
+            archive.writestr(
+                entry, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9
+            )
+
+
 class EpubError(RuntimeError):
     """An EPUB package cannot be read without losing required structure."""
 
@@ -227,7 +257,11 @@ def stage_epub(path: Path, directory: Path, number: int) -> StagedBook:
             if PurePosixPath(name).suffix.lower() == ".css":
                 data = rewrite_css(data, mapping, name)
             elif _xml_type(name):
-                data = rewrite_xml(data, mapping, name)
+                try:
+                    data = rewrite_xml(data, mapping, name)
+                except etree.XMLSyntaxError:
+                    if PurePosixPath(name).suffix.lower() not in {".html", ".svg"}:
+                        raise EpubError(f"invalid XML resource: {name}") from None
             target.write_bytes(data)
     unique = {item.id: f"book-{number:04d}-{item.id}" for item in package.manifest}
     staged_package = EpubPackage(

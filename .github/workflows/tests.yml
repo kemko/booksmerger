@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-groups --frozen
+      - name: Install fb2cng
+        run: uv run python -c 'from bookmerger.converter import FbcInstaller; print(FbcInstaller().find())'
+      - name: Install EPUBCheck
+        run: |
+          curl -fsSLO https://github.com/w3c/epubcheck/releases/download/v5.2.1/epubcheck-5.2.1.zip
+          unzip -q epubcheck-5.2.1.zip
+          echo "EPUBCHECK=$PWD/epubcheck-5.2.1/epubcheck.jar" >> "$GITHUB_ENV"
+      - run: FBC_INTEGRATION=1 uv run pytest --cov=bookmerger --cov-report=term-missing --cov-fail-under=80
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
