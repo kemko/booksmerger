@@ -43,9 +43,13 @@ def epub_factory(tmp_path: Path):
                 "</metadata><manifest>"
                 '<item id="chapter" href="text/chapter.xhtml" media-type="application/xhtml+xml"/>'
                 '<item id="css" href="styles/book.css" media-type="text/css"/>'
+                '<item id="appendix" href="text/appendix.xhtml" media-type="application/xhtml+xml"/>'
+                '<item id="font" href="fonts/reader.woff2" media-type="font/woff2"/>'
+                '<item id="audio" href="media/audio.mp3" media-type="audio/mpeg"/>'
                 '<item id="cover" href="images/cover.png" media-type="image/png" properties="cover-image"/>'
                 '<item id="diagram" href="images/diagram.svg" media-type="image/svg+xml"/>'
-                f'{navigation}</manifest><spine {toc_ref}><itemref idref="chapter"/></spine></package>'
+                f'{navigation}</manifest><spine {toc_ref}><itemref idref="chapter"/>'
+                '<itemref idref="appendix" linear="no"/></spine></package>'
             ).encode(),
             f"{root}/text/chapter.xhtml": (
                 '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml">'
@@ -55,6 +59,12 @@ def epub_factory(tmp_path: Path):
                 '<img src="../images/diagram.svg" alt="diagram"/></section></body></html>'
             ).encode(),
             f"{root}/styles/book.css": b"p { color: navy; }",
+            f"{root}/text/appendix.xhtml": (
+                '<html xmlns="http://www.w3.org/1999/xhtml"><body><p id="end">Appendix</p>'
+                '<audio src="../media/audio.mp3"/></body></html>'
+            ).encode(),
+            f"{root}/fonts/reader.woff2": b"ordinary-font-bytes",
+            f"{root}/media/audio.mp3": b"media-bytes",
             f"{root}/images/cover.png": PNG,
             f"{root}/images/diagram.svg": (
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><text id="same-id">SVG</text></svg>'
