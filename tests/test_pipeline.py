@@ -6,8 +6,10 @@ from pathlib import Path
 
 import httpx
 import pytest
+from lxml import etree
 
 from bookmerger.cli import BuildError, Command, assemble
+from bookmerger.collection import DC_NS, OPF_NS, XHTML_NS
 from bookmerger.download import DownloadedSource, Downloader
 from bookmerger.validate import ValidationError
 
@@ -76,10 +78,11 @@ def test_pipeline_generates_title_and_output_after_staging(
 
     assert output == tmp_path / "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3.epub"
     with zipfile.ZipFile(output) as archive:
-        package = archive.read("EPUB/package.opf").decode()
-        title_page = archive.read("EPUB/title.xhtml").decode()
-    assert "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3" in package
-    assert "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3" in title_page
+        package = etree.fromstring(archive.read("EPUB/package.opf"))
+        title_page = etree.fromstring(archive.read("EPUB/title.xhtml"))
+    title = "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3"
+    assert package.findtext(f"{{{OPF_NS}}}metadata/{{{DC_NS}}}title") == title
+    assert title_page.findtext(f"{{{XHTML_NS}}}body/{{{XHTML_NS}}}h1") == title
 
 
 def test_pipeline_uses_supplied_title_for_output_and_epub(
@@ -92,8 +95,10 @@ def test_pipeline_uses_supplied_title_for_output_and_epub(
     assemble(Command(title, ("one",), False), downloader=LocalDownloader((epub_factory(3),)))
 
     with zipfile.ZipFile(output) as archive:
-        assert title in archive.read("EPUB/package.opf").decode()
-        assert title in archive.read("EPUB/title.xhtml").decode()
+        package = etree.fromstring(archive.read("EPUB/package.opf"))
+        title_page = etree.fromstring(archive.read("EPUB/title.xhtml"))
+    assert package.findtext(f"{{{OPF_NS}}}metadata/{{{DC_NS}}}title") == title
+    assert title_page.findtext(f"{{{XHTML_NS}}}body/{{{XHTML_NS}}}h1") == title
 
 
 def test_pipeline_keeps_full_unsafe_long_title_inside_epub(
@@ -109,8 +114,10 @@ def test_pipeline_keeps_full_unsafe_long_title_inside_epub(
     assert output.name == "Сборник  " + "Ё" * 92 + ".epub"
     assert len(output.stem.encode()) <= 200
     with zipfile.ZipFile(output) as archive:
-        assert title in archive.read("EPUB/package.opf").decode()
-        assert title in archive.read("EPUB/title.xhtml").decode()
+        package = etree.fromstring(archive.read("EPUB/package.opf"))
+        title_page = etree.fromstring(archive.read("EPUB/title.xhtml"))
+    assert package.findtext(f"{{{OPF_NS}}}metadata/{{{DC_NS}}}title") == title
+    assert title_page.findtext(f"{{{XHTML_NS}}}body/{{{XHTML_NS}}}h1") == title
 
 
 @pytest.mark.parametrize(

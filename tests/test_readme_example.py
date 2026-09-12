@@ -10,6 +10,10 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from lxml import etree
+
+from bookmerger.collection import DC_NS, OPF_NS, XHTML_NS
+
 
 @contextmanager
 def fixture_server(files: dict[str, bytes]) -> Iterator[str]:
@@ -90,8 +94,10 @@ def test_readme_example_generates_output_and_reuses_source_cache(
     assert titled.returncode == 0, titled.stderr
     assert titled_output.is_file()
     with zipfile.ZipFile(titled_output) as archive:
-        assert "My collection" in archive.read("EPUB/package.opf").decode()
-        assert "My collection" in archive.read("EPUB/title.xhtml").decode()
+        package = etree.fromstring(archive.read("EPUB/package.opf"))
+        title_page = etree.fromstring(archive.read("EPUB/title.xhtml"))
+    assert package.findtext(f"{{{OPF_NS}}}metadata/{{{DC_NS}}}title") == "My collection"
+    assert title_page.findtext(f"{{{XHTML_NS}}}body/{{{XHTML_NS}}}h1") == "My collection"
 
     repeated_output.parent.mkdir()
     repeated = subprocess.run(

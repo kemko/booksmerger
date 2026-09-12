@@ -151,11 +151,11 @@ def assemble(
     converter: FB2Converter | None = None,
 ) -> Path:
     """Build and atomically publish one validated collection EPUB."""
-    output = Path.cwd() / output_filename(command.title) if command.title else None
     downloader = downloader or Downloader()
     converter = converter or FB2Converter()
     temporary: Path | None = None
     try:
+        output = Path.cwd() / output_filename(command.title) if command.title else None
         if output is not None:
             _prepare_output(output, command.overwrite)
         with tempfile.TemporaryDirectory(prefix=".bookmerger-") as work_name:

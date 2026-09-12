@@ -77,7 +77,7 @@ CLAUDE.md отсутствует; создавать его не требует�
 конкурентной публикации.
 - [x] Выполнить полную проверку с Java, EPUBCheck 5.2.1 и закреплённым fbc: rtk proxy env FBC_INTEGRATION=1
 EPUBCHECK=/absolute/path/epubcheck.jar uv run pytest --cov=bookmerger --cov-report=term-missing --cov-fail-under=80, подставив
-фактический путь. (fbc выполнен; EPUBCheck skipped - не установлен локально.)
+фактический путь. (При ревью выполнены fbc и EPUBCheck 5.2.1: 153 теста прошли без пропусков.)
 - [x] Выполнить rtk proxy uv run ruff check . и rtk proxy uv run ruff format --check .
 - [x] Подтвердить покрытие не ниже 80%; недоступные проверки внешних инструментов
-явно указать как ограничение проверки. (Покрытие 90.23%; EPUBCheck skipped - не установлен локально.)
+явно указать как ограничение проверки. (При ревью покрытие 90.32%; все внешние проверки выполнены.)

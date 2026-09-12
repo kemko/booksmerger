@@ -33,6 +33,10 @@ metadata: one or two distinct authors and work titles are shown, then the first 
 followed by `и др.`. Only authors are used (not translators or editors). An existing
 output needs `--overwrite`, including an automatically named one.
 
+The `--output` option has been removed. Use `--title "My collection"` to create
+`My collection.epub`, and run from the desired output directory. The filename
+cannot be set independently of the collection title.
+
 Progress is logged to stderr at INFO level. Use `--verbose` for DEBUG diagnostics:
 
 ```sh

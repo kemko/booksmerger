@@ -87,6 +87,29 @@ def test_main_rejects_existing_output_before_downloading(tmp_path, capsys, monke
     assert output.read_bytes() == b"existing file"
 
 
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [("encoding", "surrogates not allowed"), ("cwd", "current directory is missing")],
+)
+def test_main_reports_output_path_errors_before_downloading(failure, message, monkeypatch, capsys):
+    title = "\udcff" if failure == "encoding" else "Collection"
+    if failure == "cwd":
+
+        def missing_cwd():
+            raise FileNotFoundError("current directory is missing")
+
+        monkeypatch.setattr("bookmerger.cli.Path.cwd", missing_cwd)
+    monkeypatch.setattr(
+        "bookmerger.cli.Downloader.download_all", lambda *args: pytest.fail("download started")
+    )
+
+    assert main(["--title", title, "https://example.test/book"]) == 1
+    diagnostic = capsys.readouterr().err
+    assert "bookmerger:" in diagnostic
+    assert message in diagnostic
+    assert "Traceback" not in diagnostic
+
+
 def test_main_configures_one_handler_and_verbose_logging(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
