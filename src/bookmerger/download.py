@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import NamedTemporaryFile, TemporaryDirectory
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 import httpx
 from lxml import etree
@@ -63,6 +63,23 @@ def _safe_url(url: str) -> str:
     except ValueError:
         return "source"
     return urlunsplit((parts.scheme, parts.netloc.rsplit("@", 1)[-1], parts.path, "", ""))
+
+
+def _flibusta_download_url(url: str, parts: SplitResult) -> str:
+    """Return Flibusta's download endpoint for a supported book page URL."""
+    if (
+        parts.hostname is None
+        or parts.hostname.casefold() != "flibusta.is"
+        or re.fullmatch(r"/b/[0-9]+/?", parts.path) is None
+    ):
+        return url
+    path_start = len(parts.scheme) + 3 + len(parts.netloc)
+    return (
+        url[:path_start]
+        + parts.path.rstrip("/")
+        + "/download"
+        + url[path_start + len(parts.path) :]
+    )
 
 
 def _safe_detail(detail: object) -> str:
@@ -265,6 +282,7 @@ class Downloader:
             raise _error(url, "invalid source URL") from error
         if parts.scheme not in {"http", "https"} or not parts.netloc:
             raise _error(url, "only absolute HTTP(S) URLs are supported")
+        request_url = _flibusta_download_url(url, parts)
         directory.mkdir(parents=True, exist_ok=True)
         temporary = directory / f"source-{index:04d}.download"
         output: Path | None = None
@@ -272,7 +290,7 @@ class Downloader:
             cached = self._read_cache(url)
             if cached is None:
                 LOGGER.info("Source cache miss: %s", _safe_url(url))
-                data, _, _ = self._fetch(url, temporary)
+                data, _, _ = self._fetch(request_url, temporary)
                 format_name, contents = _validate(data, url, self.limits)
                 self._write_cache(url, data)
             else:

@@ -85,6 +85,166 @@ def test_downloads_redirected_fb2_without_changing_encoding_or_order(tmp_path: P
     assert result[0].path.read_bytes() == FB2
 
 
+@pytest.mark.parametrize(
+    ("url", "requested"),
+    [
+        ("https://flibusta.is/b/656901", "https://flibusta.is/b/656901/download"),
+        ("http://flibusta.is/b/42/", "http://flibusta.is/b/42/download"),
+        (
+            "HTTPS://FLIBUSTA.IS/b/7/?edition=full#contents",
+            "HTTPS://FLIBUSTA.IS/b/7/download?edition=full#contents",
+        ),
+        ("https://flibusta.is/b/0?", "https://flibusta.is/b/0/download?"),
+    ],
+)
+def test_fl_libusta_book_pages_request_download_and_keep_original_url(
+    tmp_path: Path, url: str, requested: str
+) -> None:
+    requests: list[str] = []
+    downloader = Downloader(cache_directory=tmp_path / "cache")
+
+    def fetch(request_url: str, temporary: Path) -> tuple[bytes, str, str]:
+        requests.append(request_url)
+        temporary.write_bytes(FB2)
+        return FB2, "application/fb2+xml", request_url
+
+    downloader._fetch = fetch  # type: ignore[method-assign]
+    result = downloader.download(url, tmp_path / "work")
+
+    assert requests == [requested]
+    assert result.url == url
+    assert result.path.read_bytes() == FB2
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.test/b/656901",
+        "https://books.flibusta.is/b/656901",
+        "https://flibusta.is.example.test/b/656901",
+        "https://flibusta.is/b/book",
+        "https://flibusta.is/b/656901/chapter",
+        "https://flibusta.is/b/656901/download",
+        "https://flibusta.is/b/656901/fb2",
+        "https://flibusta.is/b/656901/epub",
+    ],
+)
+def test_fl_libusta_rewrite_leaves_other_urls_unchanged(tmp_path: Path, url: str) -> None:
+    requests: list[str] = []
+    downloader = Downloader(cache_directory=tmp_path / "cache")
+
+    def fetch(request_url: str, temporary: Path) -> tuple[bytes, str, str]:
+        requests.append(request_url)
+        temporary.write_bytes(FB2)
+        return FB2, "application/fb2+xml", request_url
+
+    downloader._fetch = fetch  # type: ignore[method-assign]
+    downloader.download(url, tmp_path / "work")
+
+    assert requests == [url]
+
+
+def test_fl_libusta_rewrite_does_not_apply_to_resources(tmp_path: Path) -> None:
+    requests: list[str] = []
+    downloader = Downloader(cache_directory=tmp_path / "cache")
+
+    def fetch(request_url: str, temporary: Path) -> tuple[bytes, str, str]:
+        requests.append(request_url)
+        temporary.write_bytes(b"image")
+        return b"image", "image/png", request_url
+
+    downloader._fetch = fetch  # type: ignore[method-assign]
+    downloader.resource("https://flibusta.is/b/656901", tmp_path / "resource.download")
+
+    assert requests == ["https://flibusta.is/b/656901"]
+
+
+def test_fl_libusta_download_redirects_to_fb2(tmp_path: Path) -> None:
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        if request.url.path == "/b/656901/download":
+            return httpx.Response(302, headers={"location": "/files/book.fb2"}, request=request)
+        return response(request, FB2)
+
+    original = "https://flibusta.is/b/656901"
+    result = Downloader(
+        client=client(httpx.MockTransport(handler)), cache_directory=tmp_path / "cache"
+    ).download(original, tmp_path / "work")
+
+    assert requested == ["/b/656901/download", "/files/book.fb2"]
+    assert result.url == original
+    assert result.format == "fb2"
+
+
+@pytest.mark.parametrize(
+    ("payload", "format_name"),
+    [
+        (
+            archive(
+                {
+                    "mimetype": b"application/epub+zip",
+                    "META-INF/container.xml": b"<container/>",
+                }
+            ),
+            "epub",
+        ),
+        (archive({"book.fb2": FB2}), "fb2"),
+    ],
+)
+def test_regular_redirects_keep_supported_download_formats(
+    tmp_path: Path, payload: bytes, format_name: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/book":
+            return httpx.Response(302, headers={"location": "/file"}, request=request)
+        return response(request, payload)
+
+    result = Downloader(
+        client=client(httpx.MockTransport(handler)), cache_directory=tmp_path / "cache"
+    ).download("https://example.test/book", tmp_path / "work")
+
+    assert result.format == format_name
+
+
+def test_fl_libusta_download_rejects_html(tmp_path: Path) -> None:
+    with pytest.raises(DownloadError, match="unsupported file format"):
+        Downloader(
+            client=client(httpx.MockTransport(lambda request: response(request, HTML))),
+            cache_directory=tmp_path / "cache",
+        ).download("https://flibusta.is/b/656901", tmp_path / "work")
+
+
+def test_fl_libusta_cache_uses_original_urls_and_preserves_order(tmp_path: Path) -> None:
+    requested: list[bytes] = []
+    cache = tmp_path / "cache"
+    urls = [
+        "https://flibusta.is/b/1?edition=one",
+        "https://flibusta.is/b/1?edition=two",
+        "https://flibusta.is/b/1?edition=one",
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.raw_path)
+        return response(
+            request, b"<FictionBook><body><p>" + request.url.query + b"</p></body></FictionBook>"
+        )
+
+    first = Downloader(client=client(httpx.MockTransport(handler)), cache_directory=cache)
+    result = first.download_all(urls, tmp_path / "first")
+    repeat = Downloader(
+        client=client(httpx.MockTransport(lambda request: pytest.fail("network used"))),
+        cache_directory=cache,
+    ).download_all(urls, tmp_path / "repeat")
+
+    assert requested == [b"/b/1/download?edition=one", b"/b/1/download?edition=two"]
+    assert [item.url for item in result] == [item.url for item in repeat] == urls
+    assert [item.path.read_bytes() for item in result] == [
+        item.path.read_bytes() for item in repeat
+    ]
+
+
 def test_retries_temporary_error_and_removes_partial_file(tmp_path: Path) -> None:
     attempts = 0
 
