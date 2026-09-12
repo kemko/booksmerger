@@ -71,7 +71,8 @@ def _check_reference(
     name, fragment = target
     if name not in names:
         raise ValidationError(f"missing resource {name} referenced by {document}")
-    if fragment and fragment not in identifiers.get(name, set()):
+    # Only XML targets use document IDs; audio/video fragments select media ranges.
+    if fragment and name in identifiers and fragment not in identifiers[name]:
         raise ValidationError(f"missing anchor #{fragment} referenced by {document}")
 
 

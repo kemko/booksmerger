@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from lxml import etree
 
-from bookmerger.download import DEFAULT_LIMITS, Downloader, _validate_zip
+from bookmerger.download import DEFAULT_LIMITS, Downloader, _safe_url, _validate_zip
 from bookmerger.references import ResourceMap, resolve_uri, rewrite_css, rewrite_xml
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
@@ -427,7 +427,7 @@ def stage_epub(
             try:
                 data = rewrite_xml(data, mapping, name)
             except etree.XMLSyntaxError:
-                raise EpubError(f"invalid XML resource: {name}") from None
+                raise EpubError(f"invalid XML resource: {_safe_url(name)}") from None
         target.write_bytes(data)
     unique = {item.id: f"book-{number:04d}-{item.id}" for item in package.manifest}
     prefix_map = {
