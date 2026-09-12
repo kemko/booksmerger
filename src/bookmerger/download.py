@@ -186,6 +186,7 @@ def _classify(data: bytes, url: str, limits: DownloadLimits) -> tuple[str, bytes
         zipfile.BadZipFile,
         RuntimeError,
         EOFError,
+        UnicodeDecodeError,
         zlib.error,
         lzma.LZMAError,
     ) as error:

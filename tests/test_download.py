@@ -387,6 +387,32 @@ def test_corrupt_or_limited_cache_is_re_downloaded(tmp_path: Path) -> None:
     assert requests == 3
 
 
+def test_invalid_utf8_zip_filename_in_cache_is_downloaded_again(tmp_path: Path) -> None:
+    valid = archive({"книга.fb2": FB2})
+    corrupt = bytearray(valid)
+    filename_offset = corrupt.index(b"PK\x01\x02") + 46
+    corrupt[filename_offset] = 0xFF
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return response(request, valid)
+
+    cache = tmp_path / "cache"
+    downloader = Downloader(client=client(httpx.MockTransport(handler)), cache_directory=cache)
+    url = "https://example.test/book"
+    cache.mkdir()
+    cached = downloader._cache_path(url)
+    cached.write_bytes(corrupt)
+
+    result = downloader.download(url, tmp_path / "first")
+    repeat = downloader.download(url, tmp_path / "second")
+
+    assert len(requests) == 1
+    assert result.path.read_bytes() == repeat.path.read_bytes() == FB2
+    assert cached.read_bytes() == valid
+
+
 def test_failed_cache_publication_leaves_no_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
