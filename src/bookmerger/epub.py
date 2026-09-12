@@ -270,6 +270,9 @@ def validate_merge_input(path: Path) -> EpubPackage:
                 resolved = resolve_uri(package.opf_path, item.href)
                 if resolved is None or resolved[1] or resolved[2] or resolved[0] not in names:
                     raise EpubError(f"missing manifest resource: {item.href}")
+                # The pinned engine emits decoded paths as hrefs without URI escaping.
+                if any(character in resolved[0] for character in "%?#"):
+                    raise EpubError(f"unsupported URI characters in manifest path: {item.href}")
                 manifest_paths[item.id] = resolved[0]
             if not package.spine:
                 raise EpubError("OPF spine is empty")

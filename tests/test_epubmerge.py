@@ -5,6 +5,7 @@ import os
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from epubmerge.epubmerge import doMerge
@@ -13,6 +14,7 @@ from lxml import etree
 from bookmerger.converter import FB2Converter, fb2_images
 from bookmerger.download import DownloadLimits
 from bookmerger.merge import MergeError, merge_epubs
+from bookmerger.references import resolve_uri
 from bookmerger.validate import validate_epub
 
 NCX_NS = "http://www.daisy.org/z3986/2005/ncx/"
@@ -177,6 +179,73 @@ def test_merge_rejects_ncx_in_another_directory_before_creating_output(
     with pytest.raises(MergeError, match="source 1: NCX must share the OPF directory"):
         merge_epubs(output, (source,), "Collection")
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "text/chapter%20.xhtml",
+        "text/chapter?.xhtml",
+        "text/chapter#.xhtml",
+        "text%20/chapter.xhtml",
+    ],
+)
+def test_merge_rejects_paths_that_change_meaning_when_unescaped(
+    epub_factory, edit_epub, tmp_path: Path, resource: str
+) -> None:
+    source = epub_factory(2)
+    href = quote(resource).encode()
+    with zipfile.ZipFile(source) as archive:
+        package = archive.read("OEBPS/content.opf").replace(b"text/chapter.xhtml", href)
+        package = package.replace(
+            b"</manifest>",
+            b'<item id="decoy" href="text/chapter%20.xhtml" '
+            b'media-type="application/xhtml+xml"/></manifest>',
+        )
+        chapter = archive.read("OEBPS/text/chapter.xhtml")
+        ncx = archive.read("OEBPS/toc.ncx").replace(b"text/chapter.xhtml", href)
+    edit_epub(
+        source,
+        {
+            "OEBPS/content.opf": package,
+            "OEBPS/toc.ncx": ncx,
+            f"OEBPS/{resource}": chapter,
+            # A second decoding resolves to this valid but incorrect chapter.
+            "OEBPS/text/chapter .xhtml": chapter.replace(b"<h1>Chapter", b"<h1>Wrong chapter"),
+        },
+    )
+    output = tmp_path / "merged.epub"
+
+    with pytest.raises(MergeError, match="source 1: unsupported URI characters in manifest path"):
+        merge_epubs(output, (source,), "Collection")
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("resource", ["text/chapter 1.xhtml", "text/глава.xhtml"])
+def test_merge_preserves_encoded_spaces_and_unicode_paths(
+    epub_factory, edit_epub, tmp_path: Path, resource: str
+) -> None:
+    source = epub_factory(2)
+    href = quote(resource).encode()
+    with zipfile.ZipFile(source) as archive:
+        chapter = archive.read("OEBPS/text/chapter.xhtml")
+        package = archive.read("OEBPS/content.opf").replace(b"text/chapter.xhtml", href)
+        ncx = archive.read("OEBPS/toc.ncx").replace(b"text/chapter.xhtml", href)
+    edit_epub(
+        source,
+        {"OEBPS/content.opf": package, "OEBPS/toc.ncx": ncx, f"OEBPS/{resource}": chapter},
+    )
+    output = tmp_path / "merged.epub"
+
+    merge_epubs(output, (source,), "Collection")
+    validate_epub(output)
+
+    with zipfile.ZipFile(output) as archive:
+        package = etree.fromstring(archive.read("content.opf"))
+        href = package.xpath('//*[local-name()="item" and @id="a1chapter"]/@href')[0]
+        target = resolve_uri("content.opf", href)[0]
+        assert target == f"1/OEBPS/{resource}"
+        assert archive.read(target) == chapter
 
 
 @pytest.mark.parametrize(
