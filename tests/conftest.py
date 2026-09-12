@@ -11,6 +11,11 @@ PNG = base64.b64decode(
 )
 
 
+@pytest.fixture(autouse=True)
+def isolate_xdg_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+
 @pytest.fixture
 def epub_factory(tmp_path: Path):
     def make(version: int, *, svg_cover: bool = False) -> Path:

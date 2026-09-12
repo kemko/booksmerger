@@ -70,3 +70,4 @@ def test_readme_example_runs_through_local_http_server(epub_factory, tmp_path: P
 
     assert completed.returncode == 0, completed.stderr
     assert output.is_file()
+    assert len(list((tmp_path / "cache" / "bookmerger" / "sources").iterdir())) == 2

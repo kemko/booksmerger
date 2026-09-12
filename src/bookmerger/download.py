@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
+import os
 import stat
+import warnings
 import zipfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -39,6 +42,11 @@ class DownloadedSource:
 
 
 DEFAULT_LIMITS = DownloadLimits()
+
+
+def _default_cache_directory() -> Path:
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    return Path(cache_home) if cache_home else Path.home() / ".cache"
 
 
 def _safe_url(url: str) -> str:
@@ -142,6 +150,12 @@ def _classify(data: bytes, url: str, limits: DownloadLimits) -> tuple[str, bytes
     raise _error(url, "ZIP must be an EPUB or contain one FB2 file")
 
 
+def _validate(data: bytes, url: str, limits: DownloadLimits) -> tuple[str, bytes]:
+    if len(data) > limits.max_download_bytes:
+        raise _error(url, "download exceeds the allowed size")
+    return _classify(data, url, limits)
+
+
 class Downloader:
     """Download sources with bounded retries and no trust in response filenames."""
 
@@ -153,12 +167,16 @@ class Downloader:
         max_redirects: int = 3,
         retries: int = 2,
         client: httpx.Client | None = None,
+        cache_directory: Path | None = None,
     ) -> None:
         self.limits = limits
         self.timeout = timeout
         self.max_redirects = max_redirects
         self.retries = retries
         self.client = client
+        self.cache_directory = (
+            cache_directory or _default_cache_directory() / "bookmerger" / "sources"
+        )
 
     def resource(self, url: str, temporary: Path) -> tuple[bytes, str, str]:
         """Fetch an embedded resource with the same limits as source downloads."""
@@ -188,11 +206,17 @@ class Downloader:
             raise _error(url, "invalid source URL") from error
         if parts.scheme not in {"http", "https"} or not parts.netloc:
             raise _error(url, "only absolute HTTP(S) URLs are supported")
+        directory.mkdir(parents=True, exist_ok=True)
         temporary = directory / f"source-{index:04d}.download"
         output: Path | None = None
         try:
-            data, _, _ = self._fetch(url, temporary)
-            format_name, contents = _classify(data, url, self.limits)
+            cached = self._read_cache(url)
+            if cached is None:
+                data, _, _ = self._fetch(url, temporary)
+                format_name, contents = _validate(data, url, self.limits)
+                self._write_cache(url, data)
+            else:
+                format_name, contents = cached
             output = directory / f"source-{index:04d}.{format_name}"
             output.write_bytes(contents)
             return DownloadedSource(url, output, format_name)
@@ -202,6 +226,53 @@ class Downloader:
             raise
         finally:
             temporary.unlink(missing_ok=True)
+
+    def _cache_path(self, url: str) -> Path:
+        parts = urlsplit(url)
+        key = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+        return self.cache_directory / hashlib.sha256(key.encode()).hexdigest()
+
+    def _warn_cache(self, url: str, error: OSError) -> None:
+        warnings.warn(
+            f"cannot use source cache for {_safe_url(url)}: {error}", RuntimeWarning, stacklevel=3
+        )
+
+    def _read_cache(self, url: str) -> tuple[str, bytes] | None:
+        path = self._cache_path(url)
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            self._warn_cache(url, error)
+            return None
+        try:
+            return _validate(data, url, self.limits)
+        except DownloadError:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                self._warn_cache(url, error)
+            return None
+
+    def _write_cache(self, url: str, data: bytes) -> None:
+        temporary: Path | None = None
+        try:
+            self.cache_directory.mkdir(parents=True, exist_ok=True)
+            with NamedTemporaryFile(
+                mode="wb", prefix=".source-", dir=self.cache_directory, delete=False
+            ) as target:
+                temporary = Path(target.name)
+                target.write(data)
+            os.replace(temporary, self._cache_path(url))
+            temporary = None
+        except OSError as error:
+            self._warn_cache(url, error)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def _fetch(self, url: str, temporary: Path) -> tuple[bytes, str, str]:
         owns_client = self.client is None
