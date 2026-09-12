@@ -10,12 +10,13 @@ from urllib.parse import urlsplit
 
 from lxml import etree
 
-from bookmerger.download import DEFAULT_LIMITS, Downloader, _safe_url, _validate_zip
+from bookmerger.download import DEFAULT_LIMITS, Downloader, DownloadError, _safe_url, _validate_zip
 from bookmerger.references import ResourceMap, resolve_uri, rewrite_css, rewrite_xml
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
 DC_NS = "http://purl.org/dc/elements/1.1/"
+NCX_NS = "http://www.daisy.org/z3986/2005/ncx/"
 # https://www.w3.org/TR/epub-33/#sec-reserved-prefixes
 RESERVED_PREFIXES = {
     "a11y": "http://www.idpf.org/epub/vocab/package/a11y/#",
@@ -223,6 +224,8 @@ def read_package(path: Path) -> EpubPackage:
                     raise EpubError("DRM and obfuscated fonts are unsupported")
             opf_path = _rootfile(archive)
             root = _parse(archive.read(opf_path), "invalid OPF package document")
+    except DownloadError as error:
+        raise EpubError(str(error)) from error
     except (OSError, zipfile.BadZipFile, KeyError) as error:
         raise EpubError(f"cannot read EPUB {path}") from error
     manifest_node = root.find(f"{{{OPF_NS}}}manifest")
@@ -338,6 +341,68 @@ def read_package(path: Path) -> EpubPackage:
         progression,
         tuple(prefixes.items()),
     )
+
+
+def validate_merge_input(path: Path) -> EpubPackage:
+    """Validate the subset of EPUB EpubMerge consumes without modifying it."""
+    package = read_package(path)
+    try:
+        with zipfile.ZipFile(path) as archive:
+            _validate_zip(archive, "EPUB", DEFAULT_LIMITS)
+            names = {info.filename for info in archive.infolist() if not info.is_dir()}
+            manifest_paths: dict[str, str] = {}
+            for item in package.manifest:
+                resolved = resolve_uri(package.opf_path, item.href)
+                if resolved is None or resolved[1] or resolved[2] or resolved[0] not in names:
+                    raise EpubError(f"missing manifest resource: {item.href}")
+                manifest_paths[item.id] = resolved[0]
+            if not package.spine:
+                raise EpubError("OPF spine is empty")
+            if any(item.idref not in manifest_paths for item in package.spine):
+                raise EpubError("OPF spine refers to a missing manifest item")
+            _validate_ncx(archive, names, package, manifest_paths)
+    except DownloadError as error:
+        raise EpubError(str(error)) from error
+    except (OSError, zipfile.BadZipFile, KeyError) as error:
+        raise EpubError(f"cannot read EPUB {path}") from error
+    return package
+
+
+def _validate_ncx(
+    archive: zipfile.ZipFile,
+    names: set[str],
+    package: EpubPackage,
+    manifest_paths: dict[str, str],
+) -> None:
+    candidates = [
+        (item, manifest_paths[item.id])
+        for item in package.manifest
+        if item.media_type == "application/x-dtbncx+xml"
+    ]
+    if len(candidates) != 1:
+        raise EpubError("EPUB must have exactly one NCX navigation document")
+    _, ncx_path = candidates[0]
+    root = _parse(archive.read(ncx_path), "invalid NCX navigation document")
+    if root.tag != f"{{{NCX_NS}}}ncx":
+        raise EpubError("invalid NCX navigation document")
+    nav_maps = root.findall(f"{{{NCX_NS}}}navMap")
+    if len(nav_maps) != 1:
+        raise EpubError("NCX must have one navMap")
+    if not nav_maps[0].findall(f"{{{NCX_NS}}}navPoint"):
+        raise EpubError("NCX navMap is empty")
+    for point in nav_maps[0].iter(f"{{{NCX_NS}}}navPoint"):
+        labels = point.findall(f"{{{NCX_NS}}}navLabel")
+        contents = point.findall(f"{{{NCX_NS}}}content")
+        if (
+            len(labels) != 1
+            or not "".join(labels[0].itertext()).strip()
+            or len(contents) != 1
+            or not contents[0].get("src")
+        ):
+            raise EpubError("NCX navPoint is incomplete")
+        target = resolve_uri(ncx_path, contents[0].get("src"))
+        if target is None or target[0] not in names:
+            raise EpubError("NCX refers to a missing or external resource")
 
 
 def _xml_type(name: str) -> bool:
