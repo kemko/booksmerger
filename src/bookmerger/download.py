@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import os
+import re
 import stat
 import warnings
 import zipfile
@@ -17,6 +19,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from lxml import etree
+
+LOGGER = logging.getLogger(__name__)
 
 
 class DownloadError(RuntimeError):
@@ -58,8 +62,37 @@ def _safe_url(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc.rsplit("@", 1)[-1], parts.path, "", ""))
 
 
+def _safe_detail(detail: object) -> str:
+    """Remove URLs, including credentials and query strings, from diagnostic text."""
+    return re.sub(
+        r"(?:https?|ftp)://[^\s'\")>]+",
+        lambda match: _safe_url(match.group()),
+        str(detail),
+    )
+
+
 def _error(url: str, message: str) -> DownloadError:
     return DownloadError(f"{_safe_url(url)}: {message}")
+
+
+def _network_error(url: str, error: httpx.HTTPError) -> DownloadError:
+    detail = _safe_detail(error).strip()
+    lowered = detail.casefold()
+    if isinstance(error, httpx.TimeoutException):
+        kind = type(error).__name__.removesuffix("Timeout").casefold() or "network"
+        return _error(url, f"{kind} timeout")
+    if isinstance(error, httpx.TooManyRedirects):
+        return _error(url, "too many redirects")
+    if any(marker in lowered for marker in ("ssl", "tls", "certificate")):
+        reason = "TLS error"
+    elif any(
+        marker in lowered
+        for marker in ("dns", "getaddrinfo", "name resolution", "nodename nor servname")
+    ):
+        reason = "DNS lookup failed"
+    else:
+        reason = f"network error ({type(error).__name__})"
+    return _error(url, f"{reason}: {detail or 'no further detail'}")
 
 
 def _xml_root(data: bytes, url: str) -> etree._Element:
@@ -182,6 +215,7 @@ class Downloader:
         """Fetch an embedded resource with the same limits as source downloads."""
         if urlsplit(url).scheme not in {"http", "https"}:
             raise _error(url, "only HTTP(S) resources are supported")
+        LOGGER.info("Downloading external resource %s", _safe_url(url))
         try:
             return self._fetch(url, temporary)
         finally:
@@ -191,8 +225,13 @@ class Downloader:
         directory.mkdir(parents=True, exist_ok=True)
         downloaded: list[DownloadedSource] = []
         try:
+            total = len(urls)
             for index, url in enumerate(urls, 1):
-                downloaded.append(self.download(url, directory, index))
+                LOGGER.info("Downloading book %d/%d: %s", index, total, _safe_url(url))
+                try:
+                    downloaded.append(self.download(url, directory, index))
+                except DownloadError as error:
+                    raise DownloadError(f"book {index}/{total}: {error}") from error
             return tuple(downloaded)
         except Exception:
             for source in downloaded:
@@ -212,14 +251,20 @@ class Downloader:
         try:
             cached = self._read_cache(url)
             if cached is None:
+                LOGGER.info("Source cache miss: %s", _safe_url(url))
                 data, _, _ = self._fetch(url, temporary)
                 format_name, contents = _validate(data, url, self.limits)
                 self._write_cache(url, data)
             else:
+                LOGGER.info("Source cache hit: %s", _safe_url(url))
                 format_name, contents = cached
             output = directory / f"source-{index:04d}.{format_name}"
             output.write_bytes(contents)
+            LOGGER.info("Downloaded book %d: %s, %d bytes", index, format_name, len(contents))
             return DownloadedSource(url, output, format_name)
+        except OSError as error:
+            detail = _safe_detail(error) or type(error).__name__
+            raise _error(url, f"file operation failed: {detail}") from error
         except Exception:
             if output is not None:
                 output.unlink(missing_ok=True)
@@ -287,20 +332,36 @@ class Downloader:
                 try:
                     with client.stream("GET", url) as response:
                         if response.status_code in {408, 429} or response.status_code >= 500:
-                            if attempt < self.retries:
-                                continue
-                            raise _error(url, f"server returned HTTP {response.status_code}")
+                            error = _error(url, f"server returned HTTP {response.status_code}")
+                            if attempt == self.retries:
+                                raise error
+                            self._retry(attempt, error)
+                            continue
                         response.raise_for_status()
                         length = response.headers.get("content-length")
-                        if length is not None and int(length) > self.limits.max_download_bytes:
-                            raise _error(url, "download exceeds the allowed size")
+                        if length is not None:
+                            try:
+                                declared_size = int(length)
+                            except ValueError as error:
+                                raise _error(url, "invalid Content-Length header") from error
+                            if declared_size < 0:
+                                raise _error(url, "invalid Content-Length header")
+                            if declared_size > self.limits.max_download_bytes:
+                                raise _error(url, "download exceeds the allowed size")
                         size = 0
-                        with temporary.open("wb") as target:
-                            for chunk in response.iter_bytes():
-                                size += len(chunk)
-                                if size > self.limits.max_download_bytes:
-                                    raise _error(url, "download exceeds the allowed size")
-                                target.write(chunk)
+                        try:
+                            with temporary.open("wb") as target:
+                                for chunk in response.iter_bytes():
+                                    size += len(chunk)
+                                    if size > self.limits.max_download_bytes:
+                                        raise _error(url, "download exceeds the allowed size")
+                                    target.write(chunk)
+                        except OSError as error:
+                            detail = _safe_detail(error) or type(error).__name__
+                            raise _error(
+                                url,
+                                f"file operation failed: {detail}",
+                            ) from error
                     return (
                         temporary.read_bytes(),
                         response.headers.get("content-type", "").split(";", 1)[0].strip(),
@@ -308,20 +369,26 @@ class Downloader:
                     )
                 except DownloadError:
                     raise
-                except (
-                    httpx.ConnectError,
-                    httpx.ReadError,
-                    httpx.ReadTimeout,
-                    httpx.RemoteProtocolError,
-                ):
+                except httpx.TransportError as error:
                     if attempt == self.retries:
-                        raise _error(url, "download failed") from None
+                        raise _network_error(url, error) from None
+                    self._retry(attempt, _network_error(url, error))
             raise AssertionError("unreachable")
-        except (httpx.HTTPError, ValueError) as error:
-            raise _error(url, "download failed") from error
+        except httpx.TooManyRedirects as error:
+            raise _network_error(url, error) from None
+        except httpx.HTTPStatusError as error:
+            raise _error(url, f"server returned HTTP {error.response.status_code}") from None
+        except httpx.HTTPError as error:
+            raise _network_error(url, error) from None
+        except OSError as error:
+            detail = _safe_detail(error) or type(error).__name__
+            raise _error(url, f"file operation failed: {detail}") from error
         finally:
             if owns_client:
                 client.close()
+
+    def _retry(self, attempt: int, error: DownloadError) -> None:
+        LOGGER.info("Retry %d/%d after %s", attempt + 1, self.retries, error)
 
 
 @contextmanager

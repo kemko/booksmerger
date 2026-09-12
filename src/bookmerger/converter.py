@@ -6,6 +6,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import os
 import platform
 import shutil
@@ -22,6 +23,8 @@ from urllib.parse import unquote
 
 import httpx
 from lxml import etree
+
+LOGGER = logging.getLogger(__name__)
 
 
 class FbcError(RuntimeError):
@@ -146,11 +149,14 @@ class FbcInstaller:
         if path_binary:
             path = Path(path_binary)
             if self._compatible(path):
+                LOGGER.info("Using fbc from PATH")
                 return path
         key = _platform_key()
         cached = self.cache_root / "fbc" / RELEASE.version / key / _binary_name()
         if cached.exists() and self._compatible(cached):
+            LOGGER.info("Using cached fbc %s", RELEASE.version)
             return cached
+        LOGGER.info("Installing fbc %s", RELEASE.version)
         return self._install(cached, RELEASE.assets[key])
 
     @staticmethod
@@ -400,7 +406,9 @@ class FB2Converter:
     def convert(self, source: Path, output: Path, timeout: float = 120.0) -> FB2Metadata:
         if not source.is_file():
             raise FbcError(f"FB2 source does not exist: {source}")
+        started = time.monotonic()
         binary = self.installer.find()
+        LOGGER.info("Converting FB2 with fbc")
         images = fb2_images(source)
         metadata = fb2_metadata(source)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -437,4 +445,5 @@ class FB2Converter:
             _restore_epub(converted, images, metadata)
             output.parent.mkdir(parents=True, exist_ok=True)
             os.replace(converted, output)
+        LOGGER.info("Converted FB2 in %.2fs", time.monotonic() - started)
         return metadata

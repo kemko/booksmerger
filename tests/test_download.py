@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import threading
 import time
 import warnings
@@ -99,6 +100,125 @@ def test_retries_temporary_error_and_removes_partial_file(tmp_path: Path) -> Non
     assert attempts == 2
     assert downloaded.path.name == "source-0001.fb2"
     assert not list(tmp_path.glob("*.download"))
+
+
+@pytest.mark.parametrize(("status", "attempts"), [(403, 1), (404, 1), (429, 3), (503, 3)])
+def test_reports_http_status_and_retries_transient_responses(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, status: int, attempts: int
+) -> None:
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return response(request, b"unavailable", status)
+
+    logger = logging.getLogger("bookmerger.download")
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="bookmerger.download"):
+            with pytest.raises(DownloadError, match=f"HTTP {status}") as error:
+                Downloader(client=client(httpx.MockTransport(handler))).download(
+                    "https://user:password@example.test/book?token=secret#fragment", tmp_path
+                )
+    finally:
+        logger.removeHandler(caplog.handler)
+
+    assert requests == attempts
+    assert "password" not in str(error.value)
+    assert "secret" not in str(error.value)
+    if attempts > 1:
+        retry = f"Retry 1/2 after https://example.test/book: server returned HTTP {status}"
+        assert retry in caplog.text
+
+
+@pytest.mark.parametrize(
+    "detail", ["", "connection to https://user:pass@example.test/?token=secret failed"]
+)
+def test_reports_network_error_without_secrets(tmp_path: Path, detail: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(detail, request=request)
+
+    with pytest.raises(DownloadError, match=r"network error \(ConnectError\)") as error:
+        Downloader(client=client(httpx.MockTransport(handler))).download(
+            "https://user:pass@example.test/book?token=secret", tmp_path
+        )
+
+    assert "pass" not in str(error.value)
+    assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("detail", "message"),
+    [
+        ("[SSL: CERTIFICATE_VERIFY_FAILED] certificate failed", "TLS error"),
+        ("[Errno 8] nodename nor servname provided", "DNS lookup failed"),
+    ],
+)
+def test_classifies_tls_and_dns_errors(tmp_path: Path, detail: str, message: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(detail, request=request)
+
+    with pytest.raises(DownloadError, match=message):
+        Downloader(client=client(httpx.MockTransport(handler))).download(
+            "https://example.test/book", tmp_path
+        )
+
+
+def test_reports_too_many_redirects_without_redirect_secrets(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            302,
+            headers={"location": "https://user:pass@example.test/book?token=secret"},
+            request=request,
+        )
+
+    with pytest.raises(DownloadError, match="too many redirects") as error:
+        Downloader(client=client(httpx.MockTransport(handler))).download(
+            "https://example.test/book", tmp_path
+        )
+
+    assert "pass" not in str(error.value)
+    assert "secret" not in str(error.value)
+
+
+def test_download_failure_identifies_book_number(tmp_path: Path) -> None:
+    downloader = Downloader(
+        client=client(httpx.MockTransport(lambda request: response(request, b"missing", 404)))
+    )
+
+    with pytest.raises(DownloadError, match=r"book 1/2: .*HTTP 404"):
+        downloader.download_all(["https://example.test/one", "https://example.test/two"], tmp_path)
+
+
+def test_rejects_invalid_content_length_and_reports_file_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    invalid = Downloader(
+        client=client(
+            httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, content=FB2, headers={"content-length": "not-a-number"}, request=request
+                )
+            )
+        )
+    )
+    with pytest.raises(DownloadError, match="invalid Content-Length"):
+        invalid.download("https://example.test/book", tmp_path / "invalid")
+
+    original = Path.write_bytes
+
+    def fail_output(path: Path, data: bytes) -> int:
+        if path.name == "source-0001.fb2":
+            raise OSError("disk full")
+        return original(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", fail_output)
+    with pytest.raises(DownloadError, match="file operation failed: disk full"):
+        downloader = Downloader(
+            client=client(httpx.MockTransport(lambda request: response(request, FB2)))
+        )
+        downloader.download("https://example.test/book", tmp_path / "full")
 
 
 def test_reuses_validated_source_cache_across_downloaders_and_positions(tmp_path: Path) -> None:
@@ -340,6 +460,6 @@ def test_enforces_download_and_zip_limits(tmp_path: Path) -> None:
 
 def test_rejects_timeout_and_cleans_temporary_directory() -> None:
     with local_server() as server:
-        with pytest.raises(DownloadError, match="download failed"):
+        with pytest.raises(DownloadError, match="read timeout"):
             with temporary_downloads([f"{server}/slow"], timeout=0.01) as downloaded:
                 assert downloaded
