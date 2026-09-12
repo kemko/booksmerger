@@ -366,31 +366,18 @@ def _restore_epub(output: Path, images: tuple[FB2Image, ...], metadata: FB2Metad
                         package_metadata, f"{{{OPF_NS}}}meta", name=field, content=value
                     )
                     existing_details.add((field, value))
-            translator_ids = {
-                item.get("refines", "").removeprefix("#")
-                for item in package_metadata
-                if item.tag == f"{{{OPF_NS}}}meta"
-                and item.get("property") == "role"
-                and "".join(item.itertext()).strip() == "trl"
-            }
             translators = {
                 tuple(sorted(" ".join(item.itertext()).casefold().split()))
                 for item in package_metadata
                 if item.tag == f"{{{DC_NS}}}contributor"
-                and (item.get("id") in translator_ids or item.get(f"{{{OPF_NS}}}role") == "trl")
+                and item.get(f"{{{OPF_NS}}}role") == "trl"
             }
             for translator in metadata.translators:
                 normalized = tuple(sorted(translator.casefold().split()))
                 if normalized not in translators:
                     contributor = etree.SubElement(package_metadata, f"{{{DC_NS}}}contributor")
-                    contributor_id = f"bookmerger-translator-{len(translators)}"
-                    contributor.set("id", contributor_id)
+                    contributor.set(f"{{{OPF_NS}}}role", "trl")
                     contributor.text = translator
-                    role = etree.SubElement(package_metadata, f"{{{OPF_NS}}}meta")
-                    role.set("refines", f"#{contributor_id}")
-                    role.set("property", "role")
-                    role.set("scheme", "marc:relators")
-                    role.text = "trl"
                     translators.add(normalized)
         replacements[opf_name] = etree.tostring(opf, xml_declaration=True, encoding="utf-8")
         temporary = output.with_suffix(".restored.epub")
@@ -427,7 +414,7 @@ class FB2Converter:
                         str(self.config),
                         "convert",
                         "--to",
-                        "epub3",
+                        "epub2",
                         "--output-file",
                         str(converted),
                         "--overwrite",

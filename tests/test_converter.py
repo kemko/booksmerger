@@ -10,6 +10,7 @@ from importlib import resources
 from pathlib import Path
 
 import pytest
+from lxml import etree
 
 from bookmerger.converter import (
     RELEASE,
@@ -179,10 +180,14 @@ def test_converter_restores_images_and_translator_metadata(
         tmp_path,
         "#!/usr/bin/env python3\nimport os, shutil, sys\n"
         "if '--version' in sys.argv:\n print('fbc version 1.7.0')\n"
-        "else:\n shutil.copy(os.environ['FBC_TEST_OUTPUT'], "
+        "else:\n"
+        " open(os.environ['FBC_TEST_ARGS'], 'w').write('\\n'.join(sys.argv))\n"
+        " shutil.copy(os.environ['FBC_TEST_OUTPUT'], "
         "sys.argv[sys.argv.index('--output-file') + 1])\n",
     )
     output = tmp_path / "result.epub"
+    arguments = tmp_path / "arguments"
+    monkeypatch.setenv("FBC_TEST_ARGS", str(arguments))
 
     metadata = FB2Converter(
         FbcInstaller(tmp_path / "cache", lambda _: b""), config=tmp_path / "config.yaml"
@@ -203,12 +208,16 @@ def test_converter_restores_images_and_translator_metadata(
     assert work_parents == [output.parent]
 
     assert result.translators == ("Trudy Translator",)
+    assert "--to\nepub2" in arguments.read_text()
     original = fb2_images(Path("tests/fixtures/book.fb2"))[0].data
     with zipfile.ZipFile(output) as archive:
         assert archive.read("EPUB/cover.png") == original
         package = archive.read("EPUB/package.opf")
     assert b"Trudy Translator" in package
-    assert b">trl</" in package
+    opf = etree.fromstring(package)
+    translator = opf.xpath("//*[local-name()='contributor' and text()='Trudy Translator']")[0]
+    assert translator.get("{http://www.idpf.org/2007/opf}role") == "trl"
+    assert b"refines=" not in package
 
 
 def test_converter_reports_process_failure(tmp_path: Path) -> None:
