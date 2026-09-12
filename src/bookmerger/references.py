@@ -193,12 +193,14 @@ def rewrite_xml(data: bytes, mapping: ResourceMap, document: str) -> bytes:
                 value = element.get(name)
                 if value is None:
                     continue
-                required = name in {"src", "poster", "data"} or local in {
-                    "image",
-                    "use",
-                    "link",
-                    "item",
-                }
+                required = (
+                    name in {"src", "poster", "data"}
+                    or local in {"image", "use", "link", "item"}
+                    or (
+                        etree.QName(element).namespace == SVG_NS
+                        and local in {"feImage", "linearGradient", "radialGradient", "pattern"}
+                    )
+                )
                 replacement = mapping.rewrite(document, value, base_uri=base, required=required)
                 if replacement != value:
                     element.set(name, replacement)

@@ -75,7 +75,7 @@ def _navigation(
         except etree.XMLSyntaxError as error:
             raise CollectionError(f"invalid navigation in book {book.number}") from error
         if etree.QName(root).namespace == NCX_NS:
-            if nav_type != "toc":
+            if nav_type not in {"toc", "page-list"}:
                 continue
 
             def ncx(
@@ -88,7 +88,10 @@ def _navigation(
                 children = [ncx(item, document) for item in node.findall(f"{{{NCX_NS}}}navPoint")]
                 return label or source, _mapped_target(document, source), children, ""
 
-            nodes = root.findall(f".//{{{NCX_NS}}}navMap/{{{NCX_NS}}}navPoint")
+            container, entry = (
+                ("navMap", "navPoint") if nav_type == "toc" else ("pageList", "pageTarget")
+            )
+            nodes = root.findall(f".//{{{NCX_NS}}}{container}/{{{NCX_NS}}}{entry}")
             return [ncx(node) for node in nodes]
         navs = root.xpath(
             "//*[local-name()='nav' and "
