@@ -17,7 +17,9 @@ from bookmerger.references import resolve_uri
 
 @pytest.mark.parametrize("attribute", ["href", "xlink:href"])
 @pytest.mark.parametrize("element", ["feImage", "linearGradient", "radialGradient", "pattern"])
-def test_svg_linked_resources_are_embedded(epub_factory, edit_epub, tmp_path, attribute, element):
+def test_svg_linked_resources_are_embedded(
+    epub_factory, edit_epub, monkeypatch, tmp_path, attribute, element
+):
     source = epub_factory(3)
     raster = element == "feImage"
     resource = "image.png" if raster else "definitions.svg#paint"
@@ -52,9 +54,10 @@ def test_svg_linked_resources_are_embedded(epub_factory, edit_epub, tmp_path, at
         )
 
     output = tmp_path / "collection.epub"
+    monkeypatch.chdir(tmp_path)
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         assemble(
-            Command("Collection", output, ("https://source.test/book",), False),
+            Command("collection", ("https://source.test/book",), False),
             downloader=Downloader(client=client),
         )
     assert requested == [
@@ -73,7 +76,9 @@ def test_svg_linked_resources_are_embedded(epub_factory, edit_epub, tmp_path, at
     assert root.find("{http://www.w3.org/2000/svg}a").get(href) == "https://example.test/page"
 
 
-def test_svg_resource_failure_preserves_existing_output(epub_factory, edit_epub, tmp_path):
+def test_svg_resource_failure_preserves_existing_output(
+    epub_factory, edit_epub, monkeypatch, tmp_path
+):
     source = edit_epub(
         epub_factory(3),
         {
@@ -85,6 +90,7 @@ def test_svg_resource_failure_preserves_existing_output(epub_factory, edit_epub,
     )
     output = tmp_path / "collection.epub"
     output.write_bytes(b"existing output")
+    monkeypatch.chdir(tmp_path)
 
     def handler(request):
         return (
@@ -96,7 +102,7 @@ def test_svg_resource_failure_preserves_existing_output(epub_factory, edit_epub,
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(BuildError, match="assets.test/missing.png"):
             assemble(
-                Command("Collection", output, ("https://source.test/book",), True),
+                Command("collection", ("https://source.test/book",), True),
                 downloader=Downloader(client=client),
             )
     assert output.read_bytes() == b"existing output"
@@ -104,7 +110,9 @@ def test_svg_resource_failure_preserves_existing_output(epub_factory, edit_epub,
 
 
 @pytest.mark.parametrize("versions", [(2,), (2, 3)])
-def test_ncx_page_list_survives_in_collection(epub_factory, edit_epub, tmp_path, versions):
+def test_ncx_page_list_survives_in_collection(
+    epub_factory, edit_epub, monkeypatch, tmp_path, versions
+):
     sources = tuple(epub_factory(version) for version in versions)
     ncx = contents(sources[0])["OEBPS/toc.ncx"].replace(
         b"</ncx>",
@@ -114,8 +122,9 @@ def test_ncx_page_list_survives_in_collection(epub_factory, edit_epub, tmp_path,
     )
     edit_epub(sources[0], {"OEBPS/toc.ncx": ncx})
     output = tmp_path / "collection.epub"
+    monkeypatch.chdir(tmp_path)
     assemble(
-        Command("Collection", output, tuple(str(source) for source in sources), False),
+        Command("collection", tuple(str(source) for source in sources), False),
         downloader=LocalDownloader(sources),
     )
     result = contents(output)

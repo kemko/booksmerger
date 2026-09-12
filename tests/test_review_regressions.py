@@ -296,6 +296,7 @@ def test_cli_handles_real_validation_error_and_cleans_output(
     source = epub_factory(3)
     output = tmp_path / "collection.epub"
     output.write_bytes(b"old")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("bookmerger.cli.Downloader", lambda: LocalDownloader((source,)))
 
     def fail(*args):
@@ -306,9 +307,7 @@ def test_cli_handles_real_validation_error_and_cleans_output(
         main(
             [
                 "--title",
-                "Collection",
-                "--output",
-                str(output),
+                "collection",
                 "--overwrite",
                 "https://example.test/book",
             ]
@@ -323,6 +322,7 @@ def test_cli_handles_real_validation_error_and_cleans_output(
 def test_atomic_publication_never_clobbers_a_concurrent_output(epub_factory, monkeypatch, tmp_path):
     source = epub_factory(3)
     output = tmp_path / "collection.epub"
+    monkeypatch.chdir(tmp_path)
     link = os.link
 
     def concurrent_link(src, dst):
@@ -331,9 +331,7 @@ def test_atomic_publication_never_clobbers_a_concurrent_output(epub_factory, mon
 
     monkeypatch.setattr("bookmerger.cli.os.link", concurrent_link)
     with pytest.raises(BuildError, match="already exists"):
-        assemble(
-            Command("Collection", output, ("source",), False), downloader=LocalDownloader((source,))
-        )
+        assemble(Command("collection", ("source",), False), downloader=LocalDownloader((source,)))
     assert output.read_bytes() == b"concurrent result"
     assert not list(tmp_path.glob(".collection-*"))
 

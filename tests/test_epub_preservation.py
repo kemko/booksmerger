@@ -13,13 +13,12 @@ from bookmerger.references import resolve_uri
 
 @pytest.mark.parametrize("version", [2, 3])
 def test_collection_preserves_source_documents_and_resources(
-    epub_factory, tmp_path: Path, version: int
+    epub_factory, monkeypatch, tmp_path: Path, version: int
 ) -> None:
     source = epub_factory(version)
     output = tmp_path / "collection.epub"
-    assemble(
-        Command("Collection", output, ("source",), False), downloader=LocalDownloader((source,))
-    )
+    monkeypatch.chdir(tmp_path)
+    assemble(Command("collection", ("source",), False), downloader=LocalDownloader((source,)))
     with zipfile.ZipFile(source) as original, zipfile.ZipFile(output) as collection:
         for name in original.namelist():
             if name.endswith((".png", ".svg", ".css", ".woff2", ".mp3")):

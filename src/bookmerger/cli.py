@@ -25,7 +25,6 @@ class Command:
     """Validated command-line input for a collection build."""
 
     title: str | None
-    output: Path | None
     sources: tuple[str, ...]
     overwrite: bool
     verbose: bool = False
@@ -49,8 +48,9 @@ class _Stderr:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create one EPUB from FB2 and EPUB URLs.")
-    parser.add_argument("--title", help="Collection title")
-    parser.add_argument("--output", type=Path, help="Output EPUB path")
+    parser.add_argument(
+        "--title", help="Collection title and output filename (saved in the current directory)"
+    )
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing output file")
     parser.add_argument("--verbose", action="store_true", help="Show debug diagnostics")
     sources = parser.add_mutually_exclusive_group(required=True)
@@ -83,7 +83,7 @@ def parse_args(argv: Sequence[str] | None = None) -> Command:
         parser.error(str(error))
     if not sources:
         parser.error("provide at least one URL")
-    return Command(title, namespace.output, sources, namespace.overwrite, namespace.verbose)
+    return Command(title, sources, namespace.overwrite, namespace.verbose)
 
 
 _FORBIDDEN_FILENAME_CHARACTERS = '<>:"/\\|?*'
@@ -151,7 +151,7 @@ def assemble(
     converter: FB2Converter | None = None,
 ) -> Path:
     """Build and atomically publish one validated collection EPUB."""
-    output = command.output
+    output = Path.cwd() / output_filename(command.title) if command.title else None
     downloader = downloader or Downloader()
     converter = converter or FB2Converter()
     temporary: Path | None = None

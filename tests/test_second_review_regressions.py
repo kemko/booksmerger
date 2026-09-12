@@ -144,7 +144,9 @@ def test_unsupported_rendition_is_rejected(epub_factory, edit_epub, tmp_path):
         stage_epub(source, tmp_path / "staging", 1)
 
 
-def test_conflicting_page_progression_preserves_output(epub_factory, edit_epub, tmp_path):
+def test_conflicting_page_progression_preserves_output(
+    epub_factory, edit_epub, monkeypatch, tmp_path
+):
     sources = [epub_factory(2), epub_factory(3)]
     for source, direction in zip(sources, ("rtl", "ltr"), strict=True):
         opf = contents(source)["OEBPS/content.opf"]
@@ -158,9 +160,8 @@ def test_conflicting_page_progression_preserves_output(epub_factory, edit_epub, 
         )
     output = tmp_path / "collection.epub"
     output.write_bytes(b"existing output")
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(BuildError, match="conflicting page progression"):
-        assemble(
-            Command("Collection", output, ("one", "two"), True), downloader=LocalDownloader(sources)
-        )
+        assemble(Command("collection", ("one", "two"), True), downloader=LocalDownloader(sources))
     assert output.read_bytes() == b"existing output"
     assert not list(tmp_path.glob(".collection-*"))

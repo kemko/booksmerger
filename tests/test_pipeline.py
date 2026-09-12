@@ -32,9 +32,12 @@ def mock_downloader(
     )
 
 
-def test_pipeline_publishes_valid_epub_atomically(epub_factory, tmp_path: Path) -> None:
+def test_pipeline_publishes_valid_epub_atomically(
+    epub_factory, monkeypatch, tmp_path: Path
+) -> None:
     output = tmp_path / "collection.epub"
-    command = Command("Collection", output, ("one", "two"), False)
+    monkeypatch.chdir(tmp_path)
+    command = Command("collection", ("one", "two"), False)
 
     assert (
         assemble(command, downloader=LocalDownloader((epub_factory(2), epub_factory(3)))) == output
@@ -50,7 +53,8 @@ def test_pipeline_keeps_existing_output_when_validation_fails(
 ) -> None:
     output = tmp_path / "collection.epub"
     output.write_bytes(b"old result")
-    command = Command("Collection", output, ("one",), True)
+    monkeypatch.chdir(tmp_path)
+    command = Command("collection", ("one",), True)
 
     monkeypatch.setattr(
         "bookmerger.cli.validate_epub", lambda *_: (_ for _ in ()).throw(ValidationError("bad"))
@@ -66,7 +70,7 @@ def test_pipeline_generates_title_and_output_after_staging(
     epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    command = Command(None, None, ("one", "two"), False)
+    command = Command(None, ("one", "two"), False)
 
     output = assemble(command, downloader=LocalDownloader((epub_factory(2), epub_factory(3))))
 
@@ -78,19 +82,25 @@ def test_pipeline_generates_title_and_output_after_staging(
     assert "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3" in title_page
 
 
-def test_pipeline_uses_generated_title_with_explicit_output(epub_factory, tmp_path: Path) -> None:
-    output = tmp_path / "result.epub"
+def test_pipeline_uses_supplied_title_for_output_and_epub(
+    epub_factory, monkeypatch, tmp_path: Path
+) -> None:
+    title = "Collection title"
+    output = tmp_path / "Collection title.epub"
+    monkeypatch.chdir(tmp_path)
 
-    assemble(Command(None, output, ("one",), False), downloader=LocalDownloader((epub_factory(3),)))
+    assemble(Command(title, ("one",), False), downloader=LocalDownloader((epub_factory(3),)))
 
     with zipfile.ZipFile(output) as archive:
-        assert "Сборник — Author 3 — Fixture 3" in archive.read("EPUB/package.opf").decode()
+        assert title in archive.read("EPUB/package.opf").decode()
+        assert title in archive.read("EPUB/title.xhtml").decode()
 
 
 def test_pipeline_preserves_racing_output(
     epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     output = tmp_path / "result.epub"
+    monkeypatch.chdir(tmp_path)
     original_link = os.link
 
     def racing_link(source: Path, target: Path) -> None:
@@ -101,7 +111,7 @@ def test_pipeline_preserves_racing_output(
 
     with pytest.raises(BuildError, match="already exists"):
         assemble(
-            Command("Collection", output, ("one",), False),
+            Command("result", ("one",), False),
             downloader=LocalDownloader((epub_factory(3),)),
         )
 
@@ -128,7 +138,7 @@ def test_pipeline_reuses_cached_sources_without_title_or_output(
     first_directory.mkdir()
     monkeypatch.chdir(first_directory)
     first = assemble(
-        Command(None, None, urls, False),
+        Command(None, urls, False),
         downloader=mock_downloader(httpx.MockTransport(first_handler), cache),
     )
 
@@ -140,7 +150,7 @@ def test_pipeline_reuses_cached_sources_without_title_or_output(
     second_directory.mkdir()
     monkeypatch.chdir(second_directory)
     second = assemble(
-        Command(None, None, urls, False),
+        Command(None, urls, False),
         downloader=mock_downloader(
             httpx.MockTransport(lambda request: pytest.fail(f"network used: {request.url}")), cache
         ),
@@ -151,12 +161,13 @@ def test_pipeline_reuses_cached_sources_without_title_or_output(
 
 
 def test_pipeline_retries_only_failed_source_and_preserves_output(
-    epub_factory, tmp_path: Path
+    epub_factory, monkeypatch, tmp_path: Path
 ) -> None:
     books = {"/one": epub_factory(2).read_bytes(), "/two": epub_factory(3).read_bytes()}
     cache = tmp_path / "cache"
     output = tmp_path / "collection.epub"
     output.write_bytes(b"old result")
+    monkeypatch.chdir(tmp_path)
     urls = ("https://example.test/one", "https://example.test/two")
 
     def failing_handler(request: httpx.Request) -> httpx.Response:
@@ -166,7 +177,7 @@ def test_pipeline_retries_only_failed_source_and_preserves_output(
 
     with pytest.raises(BuildError, match=r"book 2/2"):
         assemble(
-            Command("Collection", output, urls, True),
+            Command("collection", urls, True),
             downloader=mock_downloader(httpx.MockTransport(failing_handler), cache),
         )
 
@@ -179,7 +190,7 @@ def test_pipeline_retries_only_failed_source_and_preserves_output(
         return httpx.Response(200, content=books["/two"], request=request)
 
     assemble(
-        Command("Collection", output, urls, True),
+        Command("collection", urls, True),
         downloader=mock_downloader(httpx.MockTransport(retry_handler), cache),
     )
 
@@ -190,11 +201,12 @@ def test_pipeline_retries_only_failed_source_and_preserves_output(
     assert not list(tmp_path.glob(".collection-*.epub"))
 
 
-def test_pipeline_keeps_existing_output_when_conversion_fails(tmp_path: Path) -> None:
+def test_pipeline_keeps_existing_output_when_conversion_fails(monkeypatch, tmp_path: Path) -> None:
     source = tmp_path / "source.fb2"
     source.write_bytes(b"source")
     output = tmp_path / "collection.epub"
     output.write_bytes(b"old result")
+    monkeypatch.chdir(tmp_path)
     converted: list[Path] = []
 
     class FailingConverter:
@@ -210,7 +222,7 @@ def test_pipeline_keeps_existing_output_when_conversion_fails(tmp_path: Path) ->
 
     with pytest.raises(BuildError, match="conversion failed"):
         assemble(
-            Command("Collection", output, ("one",), True),
+            Command("collection", ("one",), True),
             downloader=FB2Downloader(),  # type: ignore[arg-type]
             converter=FailingConverter(),  # type: ignore[arg-type]
         )
@@ -221,9 +233,12 @@ def test_pipeline_keeps_existing_output_when_conversion_fails(tmp_path: Path) ->
 
 
 @pytest.mark.skipif(not os.environ.get("FBC_INTEGRATION"), reason="requires pinned fbc")
-def test_mixed_fb2_and_epub_uses_pinned_converter(epub_factory, rich_fb2, tmp_path: Path) -> None:
+def test_mixed_fb2_and_epub_uses_pinned_converter(
+    epub_factory, rich_fb2, monkeypatch, tmp_path: Path
+) -> None:
     output = tmp_path / "collection.epub"
-    command = Command(None, output, ("fb2", "epub2", "epub3"), False)
+    monkeypatch.chdir(tmp_path)
+    command = Command("collection", ("fb2", "epub2", "epub3"), False)
     sources = (
         rich_fb2,
         epub_factory(2),

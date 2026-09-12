@@ -16,7 +16,9 @@ from bookmerger.cli import BuildError, Command, assemble
     "kind",
     ["css", "css-no-extension", "import", "inline", "style", "srcset", "object", "anchor"],
 )
-def test_missing_embedded_reference_preserves_output(epub_factory, edit_epub, tmp_path, kind):
+def test_missing_embedded_reference_preserves_output(
+    epub_factory, edit_epub, monkeypatch, tmp_path, kind
+):
     source = epub_factory(3)
     entries = contents(source)
     chapter = entries["OEBPS/text/chapter.xhtml"]
@@ -44,15 +46,14 @@ def test_missing_embedded_reference_preserves_output(epub_factory, edit_epub, tm
     edit_epub(source, entries)
     output = tmp_path / "collection.epub"
     output.write_bytes(b"previous collection")
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(BuildError, match="missing (resource|anchor)"):
-        assemble(
-            Command("Collection", output, ("one",), True), downloader=LocalDownloader((source,))
-        )
+        assemble(Command("collection", ("one",), True), downloader=LocalDownloader((source,)))
     assert output.read_bytes() == b"previous collection"
     assert not list(tmp_path.glob(".collection-*"))
 
 
-def test_all_contributor_roles_survive_assembly(epub_factory, edit_epub, tmp_path):
+def test_all_contributor_roles_survive_assembly(epub_factory, edit_epub, monkeypatch, tmp_path):
     source = epub_factory(3)
     opf = contents(source)["OEBPS/content.opf"].replace(
         b"</metadata>",
@@ -62,7 +63,8 @@ def test_all_contributor_roles_survive_assembly(epub_factory, edit_epub, tmp_pat
     )
     edit_epub(source, {"OEBPS/content.opf": opf})
     output = tmp_path / "collection.epub"
-    assemble(Command("Collection", output, ("one",), False), downloader=LocalDownloader((source,)))
+    monkeypatch.chdir(tmp_path)
+    assemble(Command("collection", ("one",), False), downloader=LocalDownloader((source,)))
     with zipfile.ZipFile(output) as archive:
         root = etree.fromstring(archive.read("EPUB/package.opf"))
         front = etree.fromstring(archive.read("EPUB/book-0001.xhtml"))
@@ -72,7 +74,9 @@ def test_all_contributor_roles_survive_assembly(epub_factory, edit_epub, tmp_pat
     assert "aut: Author 3" in "".join(front.itertext())
 
 
-def test_valid_embedded_reference_forms_are_accepted(epub_factory, edit_epub, tmp_path):
+def test_valid_embedded_reference_forms_are_accepted(
+    epub_factory, edit_epub, monkeypatch, tmp_path
+):
     source = epub_factory(3)
     chapter = contents(source)["OEBPS/text/chapter.xhtml"].replace(
         b"</body>",
@@ -90,12 +94,15 @@ def test_valid_embedded_reference_forms_are_accepted(epub_factory, edit_epub, tm
         },
     )
     output = tmp_path / "collection.epub"
-    assemble(Command("Collection", output, ("one",), False), downloader=LocalDownloader((source,)))
+    monkeypatch.chdir(tmp_path)
+    assemble(Command("collection", ("one",), False), downloader=LocalDownloader((source,)))
     assert output.is_file()
 
 
 @pytest.mark.parametrize("declaration", ["", "custom:", "rendition: https://example.org/other#"])
-def test_unsafe_prefix_declarations_preserve_output(epub_factory, edit_epub, tmp_path, declaration):
+def test_unsafe_prefix_declarations_preserve_output(
+    epub_factory, edit_epub, monkeypatch, tmp_path, declaration
+):
     source = epub_factory(3)
     opf = (
         contents(source)["OEBPS/content.opf"]
@@ -105,14 +112,15 @@ def test_unsafe_prefix_declarations_preserve_output(epub_factory, edit_epub, tmp
     edit_epub(source, {"OEBPS/content.opf": opf})
     output = tmp_path / "collection.epub"
     output.write_bytes(b"previous collection")
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(BuildError, match="prefix"):
-        assemble(
-            Command("Collection", output, ("one",), True), downloader=LocalDownloader((source,))
-        )
+        assemble(Command("collection", ("one",), True), downloader=LocalDownloader((source,)))
     assert output.read_bytes() == b"previous collection"
 
 
-def test_conflicting_source_prefixes_keep_their_vocabularies(epub_factory, edit_epub, tmp_path):
+def test_conflicting_source_prefixes_keep_their_vocabularies(
+    epub_factory, edit_epub, monkeypatch, tmp_path
+):
     sources = (epub_factory(2), epub_factory(3))
     for number, source in enumerate(sources, 1):
         opf = (
@@ -128,9 +136,8 @@ def test_conflicting_source_prefixes_keep_their_vocabularies(epub_factory, edit_
         )
         edit_epub(source, {"OEBPS/content.opf": opf})
     output = tmp_path / "collection.epub"
-    assemble(
-        Command("Collection", output, ("one", "two"), False), downloader=LocalDownloader(sources)
-    )
+    monkeypatch.chdir(tmp_path)
+    assemble(Command("collection", ("one", "two"), False), downloader=LocalDownloader(sources))
     with zipfile.ZipFile(output) as archive:
         root = etree.fromstring(archive.read("EPUB/package.opf"))
     tokens = root.get("prefix", "").split()

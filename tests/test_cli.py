@@ -9,11 +9,9 @@ from bookmerger.cli import Command, main, output_filename, parse_args
 
 
 def test_positional_urls_keep_order_and_duplicates() -> None:
-    command = parse_args(
-        ["--title", " Collection ", "--output", "collection.epub", "one", "two", "one"]
-    )
+    command = parse_args(["--title", " Collection ", "one", "two", "one"])
 
-    assert command == Command("Collection", Path("collection.epub"), ("one", "two", "one"), False)
+    assert command == Command("Collection", ("one", "two", "one"), False)
 
 
 def test_input_file_keeps_order_and_duplicates(tmp_path: Path) -> None:
@@ -22,28 +20,29 @@ def test_input_file_keeps_order_and_duplicates(tmp_path: Path) -> None:
         "https://example.test/a.fb2\n\nhttps://example.test/a.fb2\n", encoding="utf-8"
     )
 
-    command = parse_args(
-        ["--title", "Collection", "--output", "out.epub", "--input-file", str(sources)]
-    )
+    command = parse_args(["--title", "Collection", "--input-file", str(sources)])
 
     assert command.sources == ("https://example.test/a.fb2", "https://example.test/a.fb2")
 
 
 @pytest.mark.parametrize(
-    ("arguments", "title", "output"),
-    [
-        (["--title", "Title", "--output", "out.epub", "url"], "Title", Path("out.epub")),
-        (["--title", "Title", "url"], "Title", None),
-        (["--output", "out.epub", "url"], None, Path("out.epub")),
-        (["url"], None, None),
-    ],
+    ("arguments", "title"), [(["--title", "Title", "url"], "Title"), (["url"], None)]
 )
-def test_title_and_output_are_independently_optional(
-    arguments: list[str], title: str | None, output: Path | None
-) -> None:
+def test_title_is_optional(arguments: list[str], title: str | None) -> None:
     command = parse_args(arguments)
 
-    assert (command.title, command.output) == (title, output)
+    assert command.title == title
+
+
+def test_output_option_is_rejected() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["--output", "out.epub", "url"])
+
+
+def test_help_does_not_include_output(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["--help"])
+    assert "--output" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -66,28 +65,26 @@ def test_main_reports_short_progress(
     def fake_assemble(command: Command) -> Path:
         assert command.title == "Collection"
         logging.getLogger("bookmerger.cli").info("Downloading sources")
-        return command.output
+        return Path.cwd() / "Collection.epub"
 
     monkeypatch.setattr("bookmerger.cli.assemble", fake_assemble)
 
-    assert (
-        main(["--title", "Collection", "--output", "collection.epub", "https://example.test/book"])
-        == 0
-    )
+    assert main(["--title", "Collection", "https://example.test/book"]) == 0
     assert "Downloading sources" in capsys.readouterr().err
 
 
-def test_main_reports_invalid_output_parent_before_downloading(tmp_path, capsys, monkeypatch):
-    parent = tmp_path / "file"
-    parent.write_bytes(b"existing file")
+def test_main_rejects_existing_output_before_downloading(tmp_path, capsys, monkeypatch):
+    output = tmp_path / "Collection.epub"
+    output.write_bytes(b"existing file")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "bookmerger.cli.Downloader.download_all", lambda *args: pytest.fail("download started")
     )
-    assert main(["--output", str(parent / "out.epub"), "https://example.test/book"]) == 1
+    assert main(["--title", "Collection", "https://example.test/book"]) == 1
     diagnostic = capsys.readouterr().err
     assert "bookmerger:" in diagnostic
     assert "Traceback" not in diagnostic
-    assert parent.read_bytes() == b"existing file"
+    assert output.read_bytes() == b"existing file"
 
 
 def test_main_configures_one_handler_and_verbose_logging(
@@ -95,19 +92,17 @@ def test_main_configures_one_handler_and_verbose_logging(
 ) -> None:
     def fake_assemble(command: Command) -> Path:
         logging.getLogger("bookmerger.cli").info("Downloading sources")
-        return command.output
+        return Path.cwd() / f"{command.title}.epub"
 
     monkeypatch.setattr("bookmerger.cli.assemble", fake_assemble)
 
-    assert main(["--title", "Collection", "--output", "one.epub", "https://example.test/book"]) == 0
+    assert main(["--title", "Collection", "https://example.test/book"]) == 0
     assert (
         main(
             [
                 "--verbose",
                 "--title",
                 "Collection",
-                "--output",
-                "two.epub",
                 "https://example.test/book",
             ]
         )
@@ -120,11 +115,12 @@ def test_main_configures_one_handler_and_verbose_logging(
 
 
 def test_assemble_logs_ordered_stages(
-    epub_factory, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     from test_pipeline import LocalDownloader
 
-    command = Command("Collection", tmp_path / "collection.epub", ("one",), False)
+    monkeypatch.chdir(tmp_path)
+    command = Command("Collection", ("one",), False)
     logger = logging.getLogger("bookmerger")
     handlers, propagate = logger.handlers[:], logger.propagate
     logger.handlers.clear()
@@ -154,9 +150,9 @@ def test_assemble_logs_ordered_stages(
 @pytest.mark.parametrize(
     "arguments",
     [
-        ["--title", "Collection", "--output", "out.epub"],
-        ["--title", "", "--output", "out.epub", "https://example.test/book"],
-        ["--title", "Collection", "--output", "out.epub", "--input-file", "missing.txt"],
+        ["--title", "Collection"],
+        ["--title", "", "https://example.test/book"],
+        ["--title", "Collection", "--input-file", "missing.txt"],
     ],
 )
 def test_empty_or_unreadable_input_is_rejected(arguments: list[str]) -> None:
@@ -169,6 +165,4 @@ def test_input_file_and_positional_urls_are_exclusive(tmp_path: Path) -> None:
     sources.write_text("https://example.test/a.fb2\n", encoding="utf-8")
 
     with pytest.raises(SystemExit):
-        parse_args(
-            ["--title", "Collection", "--output", "out.epub", "--input-file", str(sources), "other"]
-        )
+        parse_args(["--title", "Collection", "--input-file", str(sources), "other"])

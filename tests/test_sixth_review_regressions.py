@@ -26,6 +26,7 @@ def test_malformed_remote_xml_redacts_cli_diagnostic(
     )
     output = tmp_path / "collection.epub"
     output.write_bytes(b"previous collection")
+    monkeypatch.chdir(tmp_path)
 
     def handler(request):
         if request.url.host == "source.test":
@@ -38,9 +39,7 @@ def test_malformed_remote_xml_redacts_cli_diagnostic(
             main(
                 [
                     "--title",
-                    "Collection",
-                    "--output",
-                    str(output),
+                    "collection",
                     "--overwrite",
                     "https://source.test/book",
                 ]
@@ -55,7 +54,7 @@ def test_malformed_remote_xml_redacts_cli_diagnostic(
     assert not list(tmp_path.glob(".collection-*"))
 
 
-def test_temporal_media_fragment_survives_assembly(epub_factory, edit_epub, tmp_path):
+def test_temporal_media_fragment_survives_assembly(epub_factory, edit_epub, monkeypatch, tmp_path):
     source = epub_factory(3)
     original = contents(source)
     appendix = original["OEBPS/text/appendix.xhtml"].replace(
@@ -63,7 +62,8 @@ def test_temporal_media_fragment_survives_assembly(epub_factory, edit_epub, tmp_
     )
     edit_epub(source, {"OEBPS/text/appendix.xhtml": appendix})
     output = tmp_path / "collection.epub"
-    assemble(Command("Collection", output, ("one",), False), downloader=LocalDownloader((source,)))
+    monkeypatch.chdir(tmp_path)
+    assemble(Command("collection", ("one",), False), downloader=LocalDownloader((source,)))
     result = contents(output)
     assert result["books/0001/OEBPS/text/appendix.xhtml"] == appendix
     assert result["books/0001/OEBPS/media/audio.mp3"] == original["OEBPS/media/audio.mp3"]
