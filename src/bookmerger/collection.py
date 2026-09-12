@@ -392,6 +392,9 @@ def _write_opf(
     )
     package.set("version", "3.0")
     package.set("unique-identifier", "bookmerger-id")
+    prefixes = dict(pair for book in books for pair in book.package.prefixes)
+    if prefixes:
+        package.set("prefix", " ".join(f"{key}: {uri}" for key, uri in prefixes.items()))
     metadata = etree.SubElement(package, f"{{{OPF_NS}}}metadata")
     item = etree.SubElement(metadata, f"{{{DC_NS}}}identifier", id="bookmerger-id")
     item.text = f"urn:uuid:{identifier}"

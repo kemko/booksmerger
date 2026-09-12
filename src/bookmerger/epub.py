@@ -16,6 +16,17 @@ from bookmerger.references import ResourceMap, resolve_uri, rewrite_css, rewrite
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
 DC_NS = "http://purl.org/dc/elements/1.1/"
+# https://www.w3.org/TR/epub-33/#sec-reserved-prefixes
+RESERVED_PREFIXES = {
+    "a11y": "http://www.idpf.org/epub/vocab/package/a11y/#",
+    "dcterms": "http://purl.org/dc/terms/",
+    "marc": "http://id.loc.gov/vocabulary/",
+    "media": "http://www.idpf.org/epub/vocab/overlays/#",
+    "onix": "http://www.editeur.org/ONIX/book/codelists/current.html#",
+    "rendition": "http://www.idpf.org/vocab/rendition/#",
+    "schema": "http://schema.org/",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+}
 XML_MEDIA_TYPES = {
     "application/xhtml+xml",
     "image/svg+xml",
@@ -109,6 +120,7 @@ class EpubPackage:
     cover: str | None
     media_metadata: tuple[bytes, ...] = ()
     page_progression_direction: str = "default"
+    prefixes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,19 +167,24 @@ def _metadata(root: etree._Element) -> BookMetadata:
     node = root.find(f"{{{OPF_NS}}}metadata")
     if node is None:
         raise EpubError("OPF has no metadata")
-    roles = {
-        item.get("refines", "").removeprefix("#"): "".join(item.itertext()).strip()
-        for item in node.findall(f"{{{OPF_NS}}}meta")
-        if item.get("property") == "role" and item.get("refines")
-    }
+    roles: dict[str, list[str]] = {}
+    for item in node.findall(f"{{{OPF_NS}}}meta"):
+        if item.get("property") == "role" and item.get("refines"):
+            role = "".join(item.itertext()).strip()
+            if role:
+                roles.setdefault(item.get("refines").removeprefix("#"), []).append(role)
     contributors: list[Contributor] = []
     for name in ("creator", "contributor"):
         for item in node.findall(f"{{{DC_NS}}}{name}"):
             value = "".join(item.itertext()).strip()
             if value:
-                role = roles.get(item.get("id", "")) or item.get(f"{{{OPF_NS}}}role")
                 default_role = "aut" if name == "creator" else "oth"
-                contributors.append(Contributor(value, role or default_role, item.get("id")))
+                person_roles = roles.get(item.get("id", "")) or [
+                    item.get(f"{{{OPF_NS}}}role") or default_role
+                ]
+                contributors.extend(
+                    Contributor(value, role, item.get("id")) for role in dict.fromkeys(person_roles)
+                )
     titles = _text_items(node, "title")
     details = tuple(
         (
@@ -265,6 +282,26 @@ def read_package(path: Path) -> EpubPackage:
     )
     if not all(item.idref in ids for item in spine):
         raise EpubError("OPF spine refers to a missing manifest item")
+    prefix_tokens = root.get("prefix", "").split()
+    prefixes: dict[str, str] = {}
+    try:
+        for key, uri in zip(prefix_tokens[::2], prefix_tokens[1::2], strict=True):
+            if not key.endswith(":") or ":" in key[:-1] or key[:-1] in prefixes:
+                raise ValueError("invalid prefix declaration")
+            key = key[:-1]
+            etree.QName(key)
+            if key in RESERVED_PREFIXES and uri != RESERVED_PREFIXES[key]:
+                raise EpubError(f"overridden reserved OPF prefix is unsupported: {key}")
+            prefixes[key] = uri
+    except ValueError as error:
+        raise EpubError("invalid OPF prefix declaration") from error
+    for item in (*manifest, *spine):
+        for prop in item.properties:
+            if (
+                ":" in prop
+                and prop.split(":", 1)[0] not in prefixes.keys() | RESERVED_PREFIXES.keys()
+            ):
+                raise EpubError(f"undeclared OPF property prefix: {prop}")
     navigation = tuple(
         item.href
         for item in sorted(manifest, key=lambda item: "nav" not in item.properties)
@@ -289,7 +326,15 @@ def read_package(path: Path) -> EpubPackage:
         if item.get("property", "").startswith("media:")
     )
     return EpubPackage(
-        opf_path, manifest, spine, navigation, metadata, cover, media_metadata, progression
+        opf_path,
+        manifest,
+        spine,
+        navigation,
+        metadata,
+        cover,
+        media_metadata,
+        progression,
+        tuple(prefixes.items()),
     )
 
 
@@ -385,6 +430,26 @@ def stage_epub(
                 raise EpubError(f"invalid XML resource: {name}") from None
         target.write_bytes(data)
     unique = {item.id: f"book-{number:04d}-{item.id}" for item in package.manifest}
+    prefix_map = {
+        key: key if key in RESERVED_PREFIXES else f"book-{number:04d}-{key}"
+        for key, _ in package.prefixes
+    }
+
+    def properties(values: tuple[str, ...]) -> tuple[str, ...]:
+        result = []
+        for value in values:
+            key, separator, term = value.partition(":")
+            result.append(f"{prefix_map.get(key, key)}:{term}" if separator else value)
+        return tuple(result)
+
+    media_metadata = []
+    for raw in package.media_metadata:
+        meta = etree.fromstring(raw)
+        for attribute in ("property", "scheme"):
+            if value := meta.get(attribute):
+                meta.set(attribute, properties((value,))[0])
+        media_metadata.append(etree.tostring(meta))
+
     staged_package = EpubPackage(
         mapping.resources[package.opf_path],
         tuple(
@@ -392,7 +457,9 @@ def stage_epub(
                 unique[item.id],
                 mapping.resources[_item_path(package, item.href)],
                 item.media_type,
-                tuple(value for value in item.properties if value != "remote-resources"),
+                properties(
+                    tuple(value for value in item.properties if value != "remote-resources")
+                ),
                 unique[item.fallback] if item.fallback else None,
                 unique[item.media_overlay] if item.media_overlay else None,
             )
@@ -405,13 +472,15 @@ def stage_epub(
             not in {resources[_item_path(package, original.href)] for original in package.manifest}
         ),
         tuple(
-            SpineItem(unique[item.idref], item.linear, item.properties) for item in package.spine
+            SpineItem(unique[item.idref], item.linear, properties(item.properties))
+            for item in package.spine
         ),
         tuple(mapping.resources[_item_path(package, href)] for href in package.navigation),
         package.metadata,
         mapping.resources[_item_path(package, package.cover)] if package.cover else None,
-        package.media_metadata,
+        tuple(media_metadata),
         package.page_progression_direction,
+        tuple((prefix_map[key], uri) for key, uri in package.prefixes),
     )
     return StagedBook(number, prefix, staged_package, mapping)
 

@@ -64,6 +64,9 @@ spread, and flow defaults are retained per spine item. Conflicting page progress
 directions or media-overlay settings that cannot apply to one collection are rejected.
 Other package rendition settings, including the deprecated rendition viewport, are
 rejected; supporting them requires a source fixture and a preservation test.
+Custom OPF property prefixes are retained per book. Redefining reserved OPF prefixes
+is unsupported; supporting that requires vocabulary-aware metadata conversion and a
+preservation test.
 A source error stops the build and leaves an existing output unchanged.
 Bookmerger writes to a temporary file
 beside the requested output, validates it, then publishes it atomically. Existing

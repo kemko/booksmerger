@@ -12,7 +12,7 @@ import tinycss2
 from lxml import etree
 
 from bookmerger.epub import XML_MEDIA_TYPES
-from bookmerger.references import SVG_NS, SVG_URL_ATTRIBUTES, _rewrite_css_tokens
+from bookmerger.references import SVG_NS, SVG_URL_ATTRIBUTES, _rewrite_css_tokens, _rewrite_srcset
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
@@ -75,7 +75,9 @@ def _check_reference(
         raise ValidationError(f"missing anchor #{fragment} referenced by {document}")
 
 
-def _check_documents(contents: dict[str, bytes], names: set[str]) -> None:
+def _check_documents(
+    contents: dict[str, bytes], names: set[str], stylesheets: dict[str, bytes]
+) -> None:
     roots = {name: _xml(data, name) for name, data in contents.items() if name in names}
     identifiers: dict[str, set[str]] = {}
     for name, root in roots.items():
@@ -83,7 +85,15 @@ def _check_documents(contents: dict[str, bytes], names: set[str]) -> None:
         if len(ids) != len(set(ids)):
             raise ValidationError(f"duplicate IDs in {name}")
         identifiers[name] = set(ids)
-    attributes = ("href", "src", "poster")
+    for name, data in stylesheets.items():
+        rules, _ = tinycss2.parse_stylesheet_bytes(data)
+
+        def check_stylesheet_url(value: str, document: str = name) -> str:
+            _check_reference(document, value, names, identifiers)
+            return value
+
+        _rewrite_css_tokens(rules, check_stylesheet_url)
+    attributes = ("href", "src", "poster", "data")
     for name, root in roots.items():
 
         def check_css_url(value: str, document: str = name) -> str:
@@ -91,12 +101,20 @@ def _check_documents(contents: dict[str, bytes], names: set[str]) -> None:
             return value
 
         for element in root.iter():
+            if not isinstance(element.tag, str):
+                continue
             for attribute in attributes:
                 if value := element.get(attribute):
                     _check_reference(name, value, names, identifiers)
             if value := element.get(f"{{{XLINK_NS}}}href"):
                 _check_reference(name, value, names, identifiers)
-            if isinstance(element.tag, str) and etree.QName(element).namespace == SVG_NS:
+            if value := element.get("srcset"):
+                _rewrite_srcset(value, check_css_url)
+            if value := element.get("style"):
+                _rewrite_css_tokens(tinycss2.parse_component_value_list(value), check_css_url)
+            if etree.QName(element).localname == "style" and element.text:
+                _rewrite_css_tokens(tinycss2.parse_stylesheet(element.text), check_css_url)
+            if etree.QName(element).namespace == SVG_NS:
                 for attribute in SVG_URL_ATTRIBUTES:
                     if value := element.get(attribute):
                         _rewrite_css_tokens(
@@ -183,7 +201,17 @@ def validate_epub(path: Path, source_directory: Path | None = None) -> None:
                     and archive.read(name).lstrip().startswith(b"<")
                 )
             }
-            _check_documents({name: archive.read(name) for name in xml_names}, names)
+            css_names = {
+                name
+                for name in names
+                if media_types.get(name) == "text/css"
+                or (name not in media_types and PurePosixPath(name).suffix.lower() == ".css")
+            }
+            _check_documents(
+                {name: archive.read(name) for name in xml_names},
+                names,
+                {name: archive.read(name) for name in css_names},
+            )
             if source_directory:
                 for source in source_directory.rglob("*"):
                     if not source.is_file():
