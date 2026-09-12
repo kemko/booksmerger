@@ -3,10 +3,11 @@
 ## Project Structure & Module Organization
 
 `bookmerger` is a Python 3.12+ CLI that combines ordered FB2 and EPUB sources into
-an EPUB 3.3 collection. Source code lives in `src/bookmerger/`: `cli.py` orchestrates
-builds, `download.py` handles downloads and caching, `converter.py` integrates
-`fb2cng`, and `epub.py`, `references.py`, `collection.py`, and `validate.py` handle
-EPUB processing. Packaged CSS and converter configuration live in
+an EPUB 2 collection through EpubMerge. Source code lives in `src/bookmerger/`:
+`cli.py` orchestrates builds, `download.py` handles downloads and caching,
+`converter.py` integrates `fb2cng`, `epub.py` validates source packages, `merge.py`
+calls EpubMerge, `metadata.py` derives automatic titles, and `references.py` plus
+`validate.py` validate generated EPUBs. Converter configuration lives in
 `src/bookmerger/data/`. Tests reside in `tests/`, shared fixtures in
 `tests/conftest.py`, and sample files in `tests/fixtures/`. Dependency decisions and
 completed plans are under `docs/`.

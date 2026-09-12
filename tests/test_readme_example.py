@@ -108,4 +108,4 @@ def test_readme_example_generates_output_and_reuses_source_cache(
 
     assert repeated.returncode == 0, repeated.stderr
     assert repeated_output.is_file()
-    assert "Source cache hit" in repeated.stderr
+    assert repeated.stderr.count("Source cache hit") == 2

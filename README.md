@@ -1,10 +1,13 @@
 # bookmerger
 
-`bookmerger` creates one EPUB 3.3 collection from ordered HTTP(S) links to FB2, EPUB
-2/3, or a ZIP containing exactly one FB2 file, served directly or through redirects.
-Repeating a link deliberately repeats that work in the collection. A Flibusta book
-link such as `https://flibusta.is/b/656901` (including a trailing slash) is requested
-as `https://flibusta.is/b/656901/download`. Other HTML pages are unsupported.
+`bookmerger` creates one EPUB 2 collection with
+[EpubMerge](https://github.com/JimmXinu/EpubMerge) from ordered HTTP(S) links to FB2,
+EPUB 2/3, or a ZIP containing exactly one FB2 file, served directly or through
+redirects. FB2 is converted to EPUB 2 first. Every EPUB input must have exactly one
+valid NCX; EPUB 3 with an NCX is accepted, but nav-only EPUB 3 is rejected. Repeating
+a link deliberately repeats that work in the collection. A Flibusta book link such as
+`https://flibusta.is/b/656901` (including a trailing slash) is requested as
+`https://flibusta.is/b/656901/download`. Other HTML pages are unsupported.
 
 ## Installation
 
@@ -63,40 +66,31 @@ Downloaded source books are cached in `$XDG_CACHE_HOME/bookmerger/sources/`
 (`~/.cache/bookmerger/sources/` when unset), so later builds reuse them even from
 another working directory. The cache has no automatic refresh: remove an entry or
 the `sources` directory to fetch the URL again. It covers source FB2, EPUB, and ZIP
-files only; externally referenced images and CSS are still fetched while preparing
-each EPUB.
+files only. External links, images, and CSS stay external and are not downloaded;
+offline reading is guaranteed only for resources already embedded in an input EPUB.
 
 ## Output and limits
 
-The result is an EPUB 3.3 ZIP. `mimetype` is its first uncompressed entry; all other
-entries use DEFLATE level 9 in stable order. Each source book stays under its own
-`books/0001/`, `books/0002/`, and so on. The collection adds a title page, visible
-contents, per-work bibliographic page, and combined navigation while retaining source
-documents and their original links.
+The result is the EPUB 2 structure written by EpubMerge: its NCX contains the source
+books in input order, with each source table of contents nested below its book. It has
+no bookmerger title page, visible contents, bibliography, or added stylesheet. Source
+files are copied under EpubMerge's numbered book directories. `mimetype` remains the
+first uncompressed ZIP entry.
 
-Raster images are copied byte-for-byte. SVG remains SVG, including text and linked
-elements; only paths affected by moving resources are changed. Source styles,
-annotations, footnotes and return links, ordinary embedded fonts, media, language,
-and direction are retained. Required HTTP(S) resources, including nested CSS imports,
-are downloaded with the source limits and included for offline reading. External
-hyperlinks remain external. Collection styles apply only to new collection pages.
-
-Creators, translators, and other contributors are merged in first-seen order with
-their roles. Languages, subjects, and publisher data are retained. Work-specific
-ISBNs, rights, series, and other publication details remain in the bibliography;
-the collection does not claim a work's ISBN.
+The collection title and input languages are passed to EpubMerge. Source creators are
+used only to derive an automatic filename; book-specific contributors, roles,
+subjects, publisher, identifiers, rights, series, and EPUB 3-specific metadata are
+not guaranteed in the merged metadata. EPUB 3 inputs are processed through their NCX,
+so EPUB 3 navigation and other EPUB 3-only features are not preserved as EPUB 3
+features in the EPUB 2 result. Source XHTML, styles, images, fonts, media, footnotes,
+and local links are passed to EpubMerge without bookmerger rewriting; compatibility is
+limited to what EpubMerge preserves.
 
 Downloads are limited to 100 MiB per source. ZIP input is limited to 10,000 entries
 and 500 MiB expanded size. Catalog pages, authenticated sources, HTML, unsafe or
-ambiguous ZIPs, DRM, and obfuscated fonts are unsupported. Source layout, orientation,
-spread, and flow defaults are retained per spine item. Conflicting page progression
-directions or media-overlay settings that cannot apply to one collection are rejected.
-Other package rendition settings, including the deprecated rendition viewport, are
-rejected; supporting them requires a source fixture and a preservation test.
-Custom OPF property prefixes are retained per book. Redefining reserved OPF prefixes
-is unsupported; supporting that requires vocabulary-aware metadata conversion and a
-preservation test.
-A source error stops the build and leaves an existing output unchanged.
+ambiguous ZIPs, DRM, obfuscated fonts, missing or ambiguous NCX documents, and NCX
+targets outside the EPUB are unsupported. A source error stops the build and leaves an
+existing output unchanged.
 Bookmerger writes to a temporary file
 beside the requested output, validates it, then publishes it atomically. Existing
 outputs require `--overwrite` to be replaced.
@@ -106,15 +100,15 @@ regression test that demonstrates the expected result.
 
 ## Reproducible local example
 
-The regression test creates small EPUB 2 and EPUB 3 books, serves them locally, and
-runs this command unchanged (with `BASE_URL` set to that temporary server):
+The regression test creates two small compatible EPUB 2 books, serves them locally,
+and runs this command unchanged (with `BASE_URL` set to that temporary server):
 
 ```sh
 bookmerger "$BASE_URL/book2.epub" "$BASE_URL/book3.epub"
 ```
 
-It creates `Сборник — Author 2, Author 3 — Fixture 2, Fixture 3.epub`; a later
-run with the same URLs can use the source cache without contacting the server.
+It creates `Сборник — Author 2 — Fixture 2.epub`; a later run with the same URLs can
+use the source cache without contacting the server.
 
 Run it with:
 
