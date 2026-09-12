@@ -181,6 +181,33 @@ def test_merge_rejects_ncx_in_another_directory_before_creating_output(
     assert not output.exists()
 
 
+@pytest.mark.parametrize("resource", ["toc name.ncx", "оглавление.ncx"])
+def test_merge_rejects_encoded_ncx_path_before_using_unvalidated_navigation(
+    epub_factory, edit_epub, tmp_path: Path, resource: str
+) -> None:
+    source = epub_factory(2)
+    href = quote(resource)
+    with zipfile.ZipFile(source) as archive:
+        package = archive.read("OEBPS/content.opf").replace(b"toc.ncx", href.encode())
+        ncx = archive.read("OEBPS/toc.ncx")
+    edit_epub(
+        source,
+        {
+            "OEBPS/content.opf": package,
+            f"OEBPS/{resource}": ncx,
+            # The engine reads this raw href instead of the validated, decoded path.
+            f"OEBPS/{href}": ncx.replace(b"text/chapter.xhtml#note", b"text/appendix.xhtml#end")
+            .replace(b"text/chapter.xhtml", b"text/appendix.xhtml")
+            .replace(b">Chapter<", b">Wrong chapter<"),
+        },
+    )
+    output = tmp_path / "merged.epub"
+
+    with pytest.raises(MergeError, match="source 1: encoded NCX paths are unsupported"):
+        merge_epubs(output, (source,), "Collection")
+    assert not output.exists()
+
+
 @pytest.mark.parametrize(
     "resource",
     [

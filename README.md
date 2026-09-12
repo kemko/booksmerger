@@ -97,11 +97,14 @@ existing output unchanged.
 NCX files outside the OPF directory are rejected because the pinned EpubMerge resolves
 their targets relative to the OPF. Supporting that layout requires an engine update
 and a navigation preservation regression.
+Percent-encoded NCX manifest paths are also rejected: the engine reads them without
+decoding and can select a different archive entry. Supporting them requires an engine
+fix and a regression proving that the validated NCX supplies the merged navigation.
 Manifest resource paths containing literal `%`, `?`, or `#` in archive names are
 rejected because the pinned engine emits them without URI escaping, which can
 silently redirect the spine or TOC to another resource. Encoded spaces and Unicode
-names remain supported. Supporting these reserved characters requires an engine
-update and a resource-target preservation regression.
+names remain supported for resources other than NCX. Supporting these reserved
+characters requires an engine update and a resource-target preservation regression.
 Bookmerger writes to a temporary file
 beside the requested output, validates it, then publishes it atomically. Existing
 outputs require `--overwrite` to be replaced.

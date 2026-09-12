@@ -299,7 +299,10 @@ def _validate_ncx(
     ]
     if len(candidates) != 1:
         raise EpubError("EPUB must have exactly one NCX navigation document")
-    _, ncx_path = candidates[0]
+    ncx_item, ncx_path = candidates[0]
+    # Unlike other resources, the pinned engine reads NCX hrefs without decoding.
+    if "%" in ncx_item.href:
+        raise EpubError("encoded NCX paths are unsupported by EpubMerge")
     # The pinned engine resolves NCX targets relative to the OPF directory.
     if PurePosixPath(ncx_path).parent != PurePosixPath(package.opf_path).parent:
         raise EpubError("NCX must share the OPF directory for EpubMerge")
