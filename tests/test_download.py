@@ -223,13 +223,16 @@ def test_fl_libusta_cache_uses_original_urls_and_preserves_order(tmp_path: Path)
         "https://flibusta.is/b/1?edition=one",
         "https://flibusta.is/b/1?edition=two",
         "https://flibusta.is/b/1?edition=one",
+        "https://flibusta.is/b/1/download?edition=one",
+    ]
+    payloads = [
+        f"<FictionBook><body><p>{text}</p></body></FictionBook>".encode()
+        for text in ("page edition one", "page edition two", "explicit download")
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
         requested.append(request.url.raw_path)
-        return response(
-            request, b"<FictionBook><body><p>" + request.url.query + b"</p></body></FictionBook>"
-        )
+        return response(request, payloads[len(requested) - 1])
 
     first = Downloader(client=client(httpx.MockTransport(handler)), cache_directory=cache)
     result = first.download_all(urls, tmp_path / "first")
@@ -238,11 +241,17 @@ def test_fl_libusta_cache_uses_original_urls_and_preserves_order(tmp_path: Path)
         cache_directory=cache,
     ).download_all(urls, tmp_path / "repeat")
 
-    assert requested == [b"/b/1/download?edition=one", b"/b/1/download?edition=two"]
-    assert [item.url for item in result] == [item.url for item in repeat] == urls
-    assert [item.path.read_bytes() for item in result] == [
-        item.path.read_bytes() for item in repeat
+    assert requested == [
+        b"/b/1/download?edition=one",
+        b"/b/1/download?edition=two",
+        b"/b/1/download?edition=one",
     ]
+    assert [item.url for item in result] == [item.url for item in repeat] == urls
+    assert (
+        [item.path.read_bytes() for item in result]
+        == [item.path.read_bytes() for item in repeat]
+        == [payloads[0], payloads[1], payloads[0], payloads[2]]
+    )
 
 
 def test_retries_temporary_error_and_removes_partial_file(tmp_path: Path) -> None:
