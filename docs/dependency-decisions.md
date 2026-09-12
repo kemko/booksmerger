@@ -8,8 +8,8 @@ then run the development checks in `README.md` before committing the lockfile.
 CI installs the committed versions with `uv sync --all-groups --frozen`.
 
 HTTPX (BSD) supplies the HTTP client required for bounded streaming downloads;
-lxml (BSD) supplies hardened XML parsing; tinycss2 (BSD) preserves CSS token
-structure while rewriting links. Their current supported Python versions cover
+lxml (BSD) supplies hardened XML parsing; tinycss2 (BSD) parses CSS references for
+validation without rewriting source stylesheets. Their supported Python versions cover
 3.12, and `uv` resolves their small, maintained dependency graphs.
 
 EpubMerge is a direct runtime dependency from the official GitHub archive for

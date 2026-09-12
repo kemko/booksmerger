@@ -77,8 +77,9 @@ no bookmerger title page, visible contents, bibliography, or added stylesheet. S
 files are copied under EpubMerge's numbered book directories. `mimetype` remains the
 first uncompressed ZIP entry.
 
-The collection title and input languages are passed to EpubMerge. Source creators are
-used only to derive an automatic filename; book-specific contributors, roles,
+The collection title and input languages are passed to EpubMerge. Source authors help
+derive the automatic collection title and filename. EpubMerge also collects authors
+into the merged metadata; other book-specific contributors, roles,
 subjects, publisher, identifiers, rights, series, and EPUB 3-specific metadata are
 not guaranteed in the merged metadata. EPUB 3 inputs are processed through their NCX,
 so EPUB 3 navigation and other EPUB 3-only features are not preserved as EPUB 3
@@ -88,7 +89,8 @@ limited to what EpubMerge preserves.
 
 Downloads are limited to 100 MiB per source. ZIP input is limited to 10,000 entries
 and 500 MiB expanded size. Catalog pages, authenticated sources, HTML, unsafe or
-ambiguous ZIPs, DRM, obfuscated fonts, missing or ambiguous NCX documents, and NCX
+ambiguous ZIPs, DRM, obfuscated fonts, missing or ambiguous NCX documents,
+namespace-prefixed NCX elements, and NCX
 targets outside the EPUB are unsupported. A source error stops the build and leaves an
 existing output unchanged.
 Bookmerger writes to a temporary file

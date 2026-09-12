@@ -1,4 +1,4 @@
-"""Lossless EPUB package reading and per-book staging."""
+"""EPUB package reading and validation for EpubMerge."""
 
 from __future__ import annotations
 
@@ -72,11 +72,6 @@ class BookMetadata:
     title: str
     contributors: tuple[Contributor, ...]
     languages: tuple[str, ...]
-    subjects: tuple[str, ...]
-    publisher: str | None
-    identifiers: tuple[str, ...]
-    rights: tuple[str, ...]
-    details: tuple[tuple[str, str], ...]
     title_is_fallback: bool = False
 
 
@@ -87,10 +82,6 @@ class EpubPackage:
     spine: tuple[SpineItem, ...]
     navigation: tuple[str, ...]
     metadata: BookMetadata
-    cover: str | None
-    media_metadata: tuple[bytes, ...] = ()
-    page_progression_direction: str = "default"
-    prefixes: tuple[tuple[str, str], ...] = ()
 
 
 def _parse(data: bytes, message: str) -> etree._Element:
@@ -148,25 +139,10 @@ def _metadata(root: etree._Element) -> BookMetadata:
                     Contributor(value, role, item.get("id")) for role in dict.fromkeys(person_roles)
                 )
     titles = _text_items(node, "title")
-    details = tuple(
-        (
-            item.get("property") or item.get("name") or etree.QName(item).localname,
-            item.get("content") or "".join(item.itertext()).strip(),
-        )
-        for item in node
-        if isinstance(item.tag, str)
-        and (item.get("content") or "".join(item.itertext()).strip())
-        and not (item.tag == f"{{{OPF_NS}}}meta" and item.get("property") == "role")
-    )
     return BookMetadata(
         titles[0] if titles else "Untitled",
         tuple(contributors),
         _text_items(node, "language"),
-        _text_items(node, "subject"),
-        next(iter(_text_items(node, "publisher")), None),
-        _text_items(node, "identifier"),
-        _text_items(node, "rights"),
-        details,
         title_is_fallback=not titles,
     )
 
@@ -273,33 +249,12 @@ def read_package(path: Path) -> EpubPackage:
         if "nav" in item.properties or item.media_type == "application/x-dtbncx+xml"
     )
     metadata = _metadata(root)
-    cover_id = next(
-        (
-            item.get("content")
-            for item in root.findall(f".//{{{OPF_NS}}}meta")
-            if item.get("name") == "cover"
-        ),
-        None,
-    )
-    cover = next(
-        (item.href for item in manifest if "cover-image" in item.properties or item.id == cover_id),
-        None,
-    )
-    media_metadata = tuple(
-        etree.tostring(item)
-        for item in root.findall(f"{{{OPF_NS}}}metadata/{{{OPF_NS}}}meta")
-        if item.get("property", "").startswith("media:")
-    )
     return EpubPackage(
         opf_path,
         manifest,
         spine,
         navigation,
         metadata,
-        cover,
-        media_metadata,
-        progression,
-        tuple(prefixes.items()),
     )
 
 
@@ -345,6 +300,9 @@ def _validate_ncx(
     root = _parse(archive.read(ncx_path), "invalid NCX navigation document")
     if root.tag != f"{{{NCX_NS}}}ncx":
         raise EpubError("invalid NCX navigation document")
+    # The pinned engine compares raw tag names when copying NCX navigation.
+    if any(element.prefix for element in root.iter(f"{{{NCX_NS}}}*")):
+        raise EpubError("namespace-prefixed NCX elements are unsupported by EpubMerge")
     nav_maps = root.findall(f"{{{NCX_NS}}}navMap")
     if len(nav_maps) != 1:
         raise EpubError("NCX must have one navMap")

@@ -61,6 +61,56 @@ def test_rejects_missing_anchor(epub_factory, tmp_path: Path) -> None:
         validate_epub(replacement)
 
 
+def test_rejects_output_with_nav_but_no_spine_toc(epub_factory, tmp_path: Path) -> None:
+    output = tmp_path / "merged.epub"
+    merge_epubs(output, (epub_factory(3, ncx=True),), "Collection")
+
+    def mutate(entries: dict[str, bytes]) -> None:
+        root = etree.fromstring(entries["content.opf"])
+        root.find("{http://www.idpf.org/2007/opf}spine").attrib.pop("toc")
+        nav = root.xpath("//*[local-name()='item' and contains(@href, 'nav.xhtml')]")[0]
+        nav.set("properties", "nav")
+        entries["content.opf"] = etree.tostring(root)
+
+    replacement = _rewrite_epub(output, tmp_path / "broken.epub", mutate)
+    with pytest.raises(ValidationError, match="no NCX navigation document"):
+        validate_epub(replacement)
+
+
+@pytest.mark.parametrize(
+    ("document", "content"),
+    [
+        ("styles/book.css", b'@import "missing.css";'),
+        ("styles/book.css", b"p { background: url(missing.png); }"),
+        ("styles/book.css", b'@media screen { p { background: url("missing.png"); } }'),
+        ("text/chapter.xhtml", b'<img srcset="../images/cover.png 1x, missing.png 2x"/>'),
+        ("text/chapter.xhtml", b'<img srcset="data:image/png;base64,AAAA 1x, missing.png 2x"/>'),
+        ("text/chapter.xhtml", b'<p style="background: url(missing.png)">Text</p>'),
+        (
+            "text/chapter.xhtml",
+            b'<style type="text/css">p { background: url(missing.png); }</style>',
+        ),
+        ("images/diagram.svg", b'<rect fill="url(missing.svg#paint)"/>'),
+    ],
+)
+def test_rejects_missing_css_srcset_and_svg_resources(
+    epub_factory, tmp_path: Path, document: str, content: bytes
+) -> None:
+    output = merged_epub(epub_factory, tmp_path)
+
+    def mutate(entries: dict[str, bytes]) -> None:
+        name = f"1/OEBPS/{document}"
+        if document.endswith(".css"):
+            entries[name] = content
+        else:
+            closing = b"</svg>" if document.endswith(".svg") else b"</body>"
+            entries[name] = entries[name].replace(closing, content + closing)
+
+    replacement = _rewrite_epub(output, tmp_path / "broken.epub", mutate)
+    with pytest.raises(ValidationError, match="missing resource .*missing"):
+        validate_epub(replacement)
+
+
 def _empty_ncx(entries: dict[str, bytes]) -> None:
     root = etree.fromstring(entries["toc.ncx"])
     nav_map = root.find(f"{{{NCX_NS}}}navMap")

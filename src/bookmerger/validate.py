@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import posixpath
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -12,11 +11,10 @@ import tinycss2
 from lxml import etree
 
 from bookmerger.epub import XML_MEDIA_TYPES
-from bookmerger.references import SVG_NS, SVG_URL_ATTRIBUTES, _rewrite_css_tokens, _rewrite_srcset
+from bookmerger.references import SVG_NS, SVG_URL_ATTRIBUTES, check_css_tokens, check_srcset
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
-EPUB_NS = "http://www.idpf.org/2007/ops"
 NCX_NS = "http://www.daisy.org/z3986/2005/ncx/"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 
@@ -26,7 +24,6 @@ class ValidationError(RuntimeError):
 
 
 _XML_SUFFIXES = {".ncx", ".opf", ".smil", ".svg", ".xhtml", ".html"}
-_RASTER_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 
 
 def _raster_media_type(data: bytes) -> str | None:
@@ -90,17 +87,15 @@ def _check_documents(
     for name, data in stylesheets.items():
         rules, _ = tinycss2.parse_stylesheet_bytes(data)
 
-        def check_stylesheet_url(value: str, document: str = name) -> str:
+        def check_stylesheet_url(value: str, document: str = name) -> None:
             _check_reference(document, value, names, identifiers)
-            return value
 
-        _rewrite_css_tokens(rules, check_stylesheet_url)
+        check_css_tokens(rules, check_stylesheet_url)
     attributes = ("href", "src", "poster", "data")
     for name, root in roots.items():
 
-        def check_css_url(value: str, document: str = name) -> str:
+        def check_css_url(value: str, document: str = name) -> None:
             _check_reference(document, value, names, identifiers)
-            return value
 
         for element in root.iter():
             if not isinstance(element.tag, str):
@@ -111,17 +106,15 @@ def _check_documents(
             if value := element.get(f"{{{XLINK_NS}}}href"):
                 _check_reference(name, value, names, identifiers)
             if value := element.get("srcset"):
-                _rewrite_srcset(value, check_css_url)
+                check_srcset(value, check_css_url)
             if value := element.get("style"):
-                _rewrite_css_tokens(tinycss2.parse_component_value_list(value), check_css_url)
+                check_css_tokens(tinycss2.parse_component_value_list(value), check_css_url)
             if etree.QName(element).localname == "style" and element.text:
-                _rewrite_css_tokens(tinycss2.parse_stylesheet(element.text), check_css_url)
+                check_css_tokens(tinycss2.parse_stylesheet(element.text), check_css_url)
             if etree.QName(element).namespace == SVG_NS:
                 for attribute in SVG_URL_ATTRIBUTES:
                     if value := element.get(attribute):
-                        _rewrite_css_tokens(
-                            tinycss2.parse_component_value_list(value), check_css_url
-                        )
+                        check_css_tokens(tinycss2.parse_component_value_list(value), check_css_url)
 
 
 def _opf_path(archive: zipfile.ZipFile) -> str:
@@ -166,7 +159,6 @@ def _check_package(archive: zipfile.ZipFile, names: set[str]) -> dict[str, str]:
         raise ValidationError("OPF manifest IDs are not unique")
     item_ids = set(ids)
     manifest_paths: dict[str, tuple[str, str]] = {}
-    nav_paths: set[str] = set()
     media_types = {opf_path: "application/oebps-package+xml"}
     for item in items:
         href = item.get("href", "")
@@ -178,8 +170,6 @@ def _check_package(archive: zipfile.ZipFile, names: set[str]) -> dict[str, str]:
         expected = _raster_media_type(archive.read(target[0]))
         if expected and item.get("media-type") != expected:
             raise ValidationError(f"incorrect MIME type for {href}")
-        if "nav" in (item.get("properties") or "").split():
-            nav_paths.add(target[0])
     spine_items = spine.findall(f"{{{OPF_NS}}}itemref")
     if not spine_items:
         raise ValidationError("OPF spine is empty")
@@ -187,28 +177,17 @@ def _check_package(archive: zipfile.ZipFile, names: set[str]) -> dict[str, str]:
         if itemref.get("idref") not in item_ids:
             raise ValidationError("OPF spine refers to a missing manifest item")
     ncx_id = spine.get("toc")
-    if ncx_id:
-        ncx = manifest_paths.get(ncx_id)
-        if ncx is None or ncx[1] != "application/x-dtbncx+xml":
-            raise ValidationError("OPF spine/@toc does not refer to an NCX manifest item")
-        _check_ncx(archive, ncx[0], names)
-    else:
-        # Keep validating the pre-EpubMerge EPUB 3 output until the CLI is switched.
-        if not nav_paths:
-            raise ValidationError("OPF has no NCX navigation document")
-        for nav_path in nav_paths:
-            nav = _xml(archive.read(nav_path), nav_path)
-            if not nav.xpath(
-                "//*[local-name()='nav' and "
-                "contains(concat(' ', normalize-space(@epub:type), ' '), ' toc ')]",
-                namespaces={"epub": EPUB_NS},
-            ):
-                raise ValidationError("navigation document has no table of contents")
+    if not ncx_id:
+        raise ValidationError("OPF has no NCX navigation document")
+    ncx = manifest_paths.get(ncx_id)
+    if ncx is None or ncx[1] != "application/x-dtbncx+xml":
+        raise ValidationError("OPF spine/@toc does not refer to an NCX manifest item")
+    _check_ncx(archive, ncx[0], names)
     return media_types
 
 
-def validate_epub(path: Path, source_directory: Path | None = None) -> None:
-    """Validate EPUB topology, links, IDs, MIME types, and copied images."""
+def validate_epub(path: Path) -> None:
+    """Validate EPUB topology, links, IDs, and MIME types."""
     try:
         with zipfile.ZipFile(path) as archive:
             infos = archive.infolist()
@@ -243,21 +222,5 @@ def validate_epub(path: Path, source_directory: Path | None = None) -> None:
                 names,
                 {name: archive.read(name) for name in css_names},
             )
-            if source_directory:
-                for source in source_directory.rglob("*"):
-                    if not source.is_file():
-                        continue
-                    data = source.read_bytes()
-                    if source.suffix.lower() not in _RASTER_SUFFIXES and not _raster_media_type(
-                        data
-                    ):
-                        continue
-                    name = source.relative_to(source_directory).as_posix()
-                    if (
-                        name in names
-                        and hashlib.sha256(data).digest()
-                        != hashlib.sha256(archive.read(name)).digest()
-                    ):
-                        raise ValidationError(f"image bytes changed: {name}")
     except (OSError, zipfile.BadZipFile, KeyError) as error:
         raise ValidationError(f"cannot validate EPUB {path}") from error

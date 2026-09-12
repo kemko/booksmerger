@@ -10,9 +10,10 @@ import pytest
 from epubmerge.epubmerge import doMerge
 from lxml import etree
 
-from bookmerger.converter import FB2Converter
+from bookmerger.converter import FB2Converter, fb2_images
 from bookmerger.download import DownloadLimits
 from bookmerger.merge import MergeError, merge_epubs
+from bookmerger.validate import validate_epub
 
 NCX_NS = "http://www.daisy.org/z3986/2005/ncx/"
 
@@ -82,10 +83,67 @@ def test_merge_epubs_keeps_order_duplicates_names_and_inputs(
         names = set(archive.namelist())
         ncx = archive.read("toc.ncx").decode()
         package = etree.fromstring(archive.read("content.opf"))
+        for number, source in enumerate((second, first, second), 1):
+            with zipfile.ZipFile(source) as original:
+                for name in (
+                    "text/chapter.xhtml",
+                    "text/appendix.xhtml",
+                    "styles/book.css",
+                    "images/cover.png",
+                    "images/diagram.svg",
+                    "fonts/reader.woff2",
+                    "media/audio.mp3",
+                ):
+                    assert archive.read(f"{number}/OEBPS/{name}") == original.read(f"OEBPS/{name}")
     assert {f"{number}/OEBPS/text/chapter.xhtml" for number in range(1, 4)} <= names
     assert ncx.index("Second fixture") < ncx.index("Fixture 2")
     assert package.xpath("string(//*[local-name()='title'][1])") == "Full title"
     assert package.xpath("//*[local-name()='language']/text()") == ["ru"]
+    validate_epub(tmp_path / "merged.epub")
+
+
+def test_merge_preserves_single_ncx_entry_with_distinct_target(
+    epub_factory, edit_epub, tmp_path: Path
+) -> None:
+    source = epub_factory(2)
+    with zipfile.ZipFile(source) as archive:
+        root = etree.fromstring(archive.read("OEBPS/toc.ncx"))
+    point = root.find(f"{{{NCX_NS}}}navMap/{{{NCX_NS}}}navPoint")
+    point.remove(point.find(f"{{{NCX_NS}}}navPoint"))
+    point.find(f"{{{NCX_NS}}}navLabel/{{{NCX_NS}}}text").text = "Appendix"
+    point.find(f"{{{NCX_NS}}}content").set("src", "text/appendix.xhtml#end")
+    edit_epub(source, {"OEBPS/toc.ncx": etree.tostring(root)})
+
+    output = tmp_path / "merged.epub"
+    merge_epubs(output, (source,), "Collection")
+    validate_epub(output)
+
+    with zipfile.ZipFile(output) as archive:
+        books = _ncx_book_points(archive.read("toc.ncx"))
+    children = books[0].findall(f"{{{NCX_NS}}}navPoint")
+    assert len(children) == 1
+    assert children[0].find(f"{{{NCX_NS}}}navLabel/{{{NCX_NS}}}text").text == "Appendix"
+    assert children[0].find(f"{{{NCX_NS}}}content").get("src") == "1/OEBPS/text/appendix.xhtml#end"
+
+
+@pytest.mark.parametrize("tag", ["ncx", "navMap", "navPoint", "content"])
+def test_merge_rejects_prefixed_ncx_before_creating_output(
+    epub_factory, edit_epub, tmp_path: Path, tag: str
+) -> None:
+    source = epub_factory(2)
+    with zipfile.ZipFile(source) as archive:
+        ncx = archive.read("OEBPS/toc.ncx").replace(
+            b"<ncx ", f'<ncx xmlns:ncx="{NCX_NS}" '.encode()
+        )
+    ncx = ncx.replace(f"<{tag}".encode(), f"<ncx:{tag}".encode()).replace(
+        f"</{tag}>".encode(), f"</ncx:{tag}>".encode()
+    )
+    edit_epub(source, {"OEBPS/toc.ncx": ncx})
+    output = tmp_path / "merged.epub"
+
+    with pytest.raises(MergeError, match="source 1: namespace-prefixed NCX"):
+        merge_epubs(output, (source,), "Collection")
+    assert not output.exists()
 
 
 @pytest.mark.parametrize(
@@ -225,3 +283,33 @@ def test_real_fbc_epub2_merges_with_nested_ncx_in_source_order(tmp_path: Path) -
         "Second FB2",
     ]
     assert all(point.findall(f"{{{NCX_NS}}}navPoint") for point in points)
+
+
+@pytest.mark.skipif(not os.environ.get("FBC_INTEGRATION"), reason="requires pinned fbc")
+def test_real_fbc_merge_preserves_images_text_and_footnotes(rich_fb2, tmp_path: Path) -> None:
+    converted, output = tmp_path / "converted.epub", tmp_path / "merged.epub"
+    FB2Converter().convert(rich_fb2, converted)
+    merge_epubs(output, (converted,), "Rich FB2")
+    validate_epub(output)
+
+    with zipfile.ZipFile(converted) as original, zipfile.ZipFile(output) as merged:
+        for name in original.namelist():
+            if name.endswith((".xhtml", ".css", ".png", ".svg")):
+                assert merged.read(f"1/{name}") == original.read(name)
+        merged_data = [merged.read(name) for name in merged.namelist()]
+        assert all(image.data in merged_data for image in fb2_images(rich_fb2))
+        documents = [
+            etree.fromstring(merged.read(name))
+            for name in merged.namelist()
+            if name.endswith(".xhtml")
+        ]
+    text = " ".join(" ".join(root.itertext()) for root in documents)
+    assert "Nested chapter" in text
+    assert "Nested text" in text
+    assert "Note" in text
+    links = [link for root in documents for link in root.xpath("//*[local-name()='a']")]
+    assert any(link.get("href", "").endswith("#note") for link in links)
+    assert any(
+        link.get("href", "").endswith("#same-id") and "return" in "".join(link.itertext())
+        for link in links
+    )

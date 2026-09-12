@@ -35,6 +35,7 @@ def merge_epubs(output: Path, sources: Sequence[Path], title: str) -> tuple[Epub
             languages=list(languages),
             titlenavpoints=True,
             originalnavpoints=True,
+            keepsingletocs=True,
         )
     except Exception as error:
         raise MergeError(f"EpubMerge failed: {error}") from error

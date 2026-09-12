@@ -99,6 +99,34 @@ def test_pipeline_keeps_existing_output_when_validation_fails(
     assert not list(tmp_path.glob(".collection-*.epub"))
 
 
+@pytest.mark.parametrize("replace_fails", [False, True])
+def test_pipeline_overwrite_publication(
+    epub_factory, monkeypatch, tmp_path: Path, replace_fails: bool
+) -> None:
+    output = tmp_path / "collection.epub"
+    output.write_bytes(b"old result")
+    monkeypatch.chdir(tmp_path)
+    command = Command("collection", ("one",), True)
+    downloader = LocalDownloader((epub_factory(2),))
+
+    if replace_fails:
+
+        def fail_replace(source: Path, target: Path) -> None:
+            assert source.is_file()
+            assert target == output
+            raise OSError("replace failed")
+
+        monkeypatch.setattr("bookmerger.cli.os.replace", fail_replace)
+        with pytest.raises(BuildError, match="replace failed"):
+            assemble(command, downloader=downloader)
+        assert output.read_bytes() == b"old result"
+    else:
+        assert assemble(command, downloader=downloader) == output
+        with zipfile.ZipFile(output) as archive:
+            assert "1/OEBPS/text/chapter.xhtml" in archive.namelist()
+    assert not list(tmp_path.glob(".collection-*.epub"))
+
+
 def test_pipeline_keeps_existing_output_when_download_or_merge_fails(
     epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

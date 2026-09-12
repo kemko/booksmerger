@@ -12,8 +12,7 @@ def _book(
         (),
         (),
         (),
-        BookMetadata(title, contributors, (), (), None, (), (), (), title_is_fallback=fallback),
-        None,
+        BookMetadata(title, contributors, (), title_is_fallback=fallback),
     )
 
 
