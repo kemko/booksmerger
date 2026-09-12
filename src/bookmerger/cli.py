@@ -12,10 +12,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from bookmerger.collection import build_collection, generated_title
 from bookmerger.converter import FB2Converter
 from bookmerger.download import Downloader, _safe_detail
-from bookmerger.epub import stage_epub, write_epub
+from bookmerger.epub import validate_merge_input
+from bookmerger.merge import merge_epubs
+from bookmerger.metadata import generated_title
 from bookmerger.validate import validate_epub
 
 
@@ -173,30 +174,26 @@ def assemble(
                     lambda source=source, target=target: converter.convert(source.path, target),
                 )
                 converted.append(target)
-            staging = work / "staging"
-            books = tuple(
+            packages = tuple(
                 _stage(
-                    f"staging EPUB {number}/{len(converted)}",
-                    lambda source=source, number=number: stage_epub(
-                        source, staging, number, downloader=downloader
-                    ),
+                    f"checking EPUB {number}/{len(converted)}",
+                    lambda source=source: validate_merge_input(source),
                 )
                 for number, source in enumerate(converted, 1)
             )
             title = _stage(
-                "determining collection title", lambda: command.title or generated_title(books)
+                "determining collection title", lambda: command.title or generated_title(packages)
             )
             if output is None:
                 output = Path.cwd() / output_filename(title)
             _prepare_output(output, command.overwrite)
-            _stage("building collection", lambda: build_collection(title, books, staging))
             descriptor, temp_name = tempfile.mkstemp(
                 prefix=f".{output.stem}-", suffix=".epub", dir=output.parent
             )
             os.close(descriptor)
             temporary = Path(temp_name)
-            _stage("packaging EPUB", lambda: write_epub(staging, temporary))
-            _stage("validating EPUB", lambda: validate_epub(temporary, staging))
+            _stage("merging EPUBs", lambda: merge_epubs(temporary, converted, title))
+            _stage("validating EPUB", lambda: validate_epub(temporary))
 
             def publish() -> None:
                 if command.overwrite:

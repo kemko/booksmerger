@@ -22,7 +22,6 @@ bookmerger = "bookmerger.cli:main"
 
 [dependency-groups]
 dev = [
-  "EbookLib>=0.20",
   "pytest>=9.1.1",
   "pytest-cov>=7.1.0",
   "ruff>=0.16.7",

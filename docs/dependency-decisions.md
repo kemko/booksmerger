@@ -29,10 +29,5 @@ no support SLA, security policy, or independently verified vulnerability
 advisory status was available during evaluation. The pinned archive reduces
 source drift but does not replace upstream security maintenance.
 
-EbookLib is included only as a test dependency to document its evaluation;
-it is not used by the application. Its writer rebuilds the OPF paths and drops
-an unreferenced NCX (verified by `tests/test_ebooklib_evaluation.py`), while this project must retain
-unknown markup, namespace prefixes, byte-identical raster resources, and the
-original manifest/spine structure. Later EPUB work will use `zipfile` for
-copying and `lxml` only for the addressed XML edits. The preservation test
-locks in representative EPUB2 and EPUB3 documents, CSS, PNG, and SVG inputs.
+EbookLib is not used. EpubMerge is the only merger; input validation reads ZIP
+and XML metadata without unpacking or rewriting source content.

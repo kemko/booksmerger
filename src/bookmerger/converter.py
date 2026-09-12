@@ -369,8 +369,7 @@ def _restore_epub(output: Path, images: tuple[FB2Image, ...], metadata: FB2Metad
             translators = {
                 tuple(sorted(" ".join(item.itertext()).casefold().split()))
                 for item in package_metadata
-                if item.tag == f"{{{DC_NS}}}contributor"
-                and item.get(f"{{{OPF_NS}}}role") == "trl"
+                if item.tag == f"{{{DC_NS}}}contributor" and item.get(f"{{{OPF_NS}}}role") == "trl"
             }
             for translator in metadata.translators:
                 normalized = tuple(sorted(translator.casefold().split()))

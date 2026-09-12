@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import mimetypes
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
-from urllib.parse import urlsplit
+from pathlib import Path
 
 from lxml import etree
 
-from bookmerger.download import DEFAULT_LIMITS, Downloader, DownloadError, _safe_url, _validate_zip
-from bookmerger.references import ResourceMap, resolve_uri, rewrite_css, rewrite_xml
+from bookmerger.download import DEFAULT_LIMITS, DownloadError, _validate_zip
+from bookmerger.references import resolve_uri
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
@@ -35,36 +33,6 @@ XML_MEDIA_TYPES = {
     "application/x-dtbncx+xml",
     "application/oebps-package+xml",
 }
-
-
-def write_epub(directory: Path, output: Path) -> None:
-    """Write a deterministic EPUB container from a prepared directory."""
-    container = directory / "META-INF" / "container.xml"
-    container.parent.mkdir(parents=True, exist_ok=True)
-    container.write_bytes(
-        b'<?xml version="1.0" encoding="UTF-8"?>'
-        b'<container version="1.0" '
-        b'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
-        b'<rootfiles><rootfile full-path="EPUB/package.opf" '
-        b'media-type="application/oebps-package+xml"/>'
-        b"</rootfiles></container>"
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        mimetype = zipfile.ZipInfo("mimetype", date_time=(1980, 1, 1, 0, 0, 0))
-        mimetype.compress_type = zipfile.ZIP_STORED
-        mimetype.extra = b""
-        archive.writestr(mimetype, b"application/epub+zip")
-        for path in sorted(item for item in directory.rglob("*") if item.is_file()):
-            name = path.relative_to(directory).as_posix()
-            if name == "mimetype":
-                continue
-            entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-            entry.compress_type = zipfile.ZIP_DEFLATED
-            entry.extra = b""
-            archive.writestr(
-                entry, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9
-            )
 
 
 class EpubError(RuntimeError):
@@ -99,7 +67,7 @@ class Contributor:
 
 @dataclass(frozen=True)
 class BookMetadata:
-    """Metadata retained from a source package for collection front matter."""
+    """Source metadata retained for title generation and merge options."""
 
     title: str
     contributors: tuple[Contributor, ...]
@@ -123,14 +91,6 @@ class EpubPackage:
     media_metadata: tuple[bytes, ...] = ()
     page_progression_direction: str = "default"
     prefixes: tuple[tuple[str, str], ...] = ()
-
-
-@dataclass(frozen=True)
-class StagedBook:
-    number: int
-    prefix: str
-    package: EpubPackage
-    resource_map: ResourceMap
 
 
 def _parse(data: bytes, message: str) -> etree._Element:
@@ -403,155 +363,3 @@ def _validate_ncx(
         target = resolve_uri(ncx_path, contents[0].get("src"))
         if target is None or target[0] not in names:
             raise EpubError("NCX refers to a missing or external resource")
-
-
-def _xml_type(name: str) -> bool:
-    return PurePosixPath(name).suffix.lower() in {
-        ".xhtml",
-        ".html",
-        ".svg",
-        ".smil",
-        ".ncx",
-        ".opf",
-    }
-
-
-def stage_epub(
-    path: Path, directory: Path, number: int, *, downloader: Downloader | None = None
-) -> StagedBook:
-    """Copy one EPUB under ``books/NNNN`` while retaining its path topology.
-
-    References remain valid because every archive path moves by the same prefix;
-    the rewrite pass handles percent-encoded/base-URI references when necessary.
-    """
-    package = read_package(path)
-    prefix = f"books/{number:04d}"
-    directory.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(path) as archive:
-        names = [info.filename for info in archive.infolist() if not info.is_dir()]
-        pending = [(name, archive.read(name)) for name in names]
-    resources = ResourceMap.under(names, prefix).resources
-    media_types = {_item_path(package, item.href): item.media_type for item in package.manifest}
-    remote_items: list[ManifestItem] = []
-    total = sum(len(data) for _, data in pending)
-    downloader = downloader or Downloader()
-
-    def fetch(url: str) -> str:
-        nonlocal total
-        if url in resources:
-            return resources[url]
-        if len(pending) >= downloader.limits.max_zip_entries:
-            raise EpubError("too many embedded resources")
-        data, content_type, final_url = downloader.resource(
-            url, directory / f"remote-{number:04d}.download"
-        )
-        if final_url in resources:
-            resources[url] = resources[final_url]
-            return resources[url]
-        total += len(data)
-        if total > downloader.limits.max_zip_uncompressed_bytes:
-            raise EpubError("embedded resources exceed expanded size limit")
-        declared = next((item.media_type for item in package.manifest if item.href == url), None)
-        media_type = (
-            declared
-            or (content_type if content_type != "application/octet-stream" else None)
-            or mimetypes.guess_type(urlsplit(final_url).path)[0]
-        )
-        if data.startswith(b"\x89PNG\r\n\x1a\n"):
-            media_type = "image/png"
-        elif data.startswith(b"\xff\xd8\xff"):
-            media_type = "image/jpeg"
-        elif data.startswith((b"GIF87a", b"GIF89a")):
-            media_type = "image/gif"
-        if not media_type:
-            raise EpubError("cannot determine embedded resource MIME type")
-        suffix = mimetypes.guess_extension(media_type) or ".bin"
-        folder = "_remote"
-        destination = f"{prefix}/{folder}/{len(remote_items):04d}{suffix}"
-        while destination in resources.values():
-            folder += "_"
-            destination = f"{prefix}/{folder}/{len(remote_items):04d}{suffix}"
-        resources[url] = destination
-        resources[final_url] = destination
-        media_types[final_url] = media_type
-        pending.append((final_url, data))
-        remote_items.append(
-            ManifestItem(f"remote-{number:04d}-{len(remote_items)}", destination, media_type)
-        )
-        return destination
-
-    mapping = ResourceMap(resources, fetch)
-    for item in package.manifest:
-        if urlsplit(item.href).scheme in {"http", "https"}:
-            fetch(item.href)
-    for name, data in pending:
-        target = directory / mapping.resources[name]
-        target.parent.mkdir(parents=True, exist_ok=True)
-        media_type = media_types.get(name)
-        if media_type == "text/css" or (media_type is None and target.suffix.lower() == ".css"):
-            data = rewrite_css(data, mapping, name)
-        elif media_type in XML_MEDIA_TYPES or (media_type is None and _xml_type(target.name)):
-            try:
-                data = rewrite_xml(data, mapping, name)
-            except etree.XMLSyntaxError:
-                raise EpubError(f"invalid XML resource: {_safe_url(name)}") from None
-        target.write_bytes(data)
-    unique = {item.id: f"book-{number:04d}-{item.id}" for item in package.manifest}
-    prefix_map = {
-        key: key if key in RESERVED_PREFIXES else f"book-{number:04d}-{key}"
-        for key, _ in package.prefixes
-    }
-
-    def properties(values: tuple[str, ...]) -> tuple[str, ...]:
-        result = []
-        for value in values:
-            key, separator, term = value.partition(":")
-            result.append(f"{prefix_map.get(key, key)}:{term}" if separator else value)
-        return tuple(result)
-
-    media_metadata = []
-    for raw in package.media_metadata:
-        meta = etree.fromstring(raw)
-        for attribute in ("property", "scheme"):
-            if value := meta.get(attribute):
-                meta.set(attribute, properties((value,))[0])
-        media_metadata.append(etree.tostring(meta))
-
-    staged_package = EpubPackage(
-        mapping.resources[package.opf_path],
-        tuple(
-            ManifestItem(
-                unique[item.id],
-                mapping.resources[_item_path(package, item.href)],
-                item.media_type,
-                properties(
-                    tuple(value for value in item.properties if value != "remote-resources")
-                ),
-                unique[item.fallback] if item.fallback else None,
-                unique[item.media_overlay] if item.media_overlay else None,
-            )
-            for item in package.manifest
-        )
-        + tuple(
-            item
-            for item in remote_items
-            if item.href
-            not in {resources[_item_path(package, original.href)] for original in package.manifest}
-        ),
-        tuple(
-            SpineItem(unique[item.idref], item.linear, properties(item.properties))
-            for item in package.spine
-        ),
-        tuple(mapping.resources[_item_path(package, href)] for href in package.navigation),
-        package.metadata,
-        mapping.resources[_item_path(package, package.cover)] if package.cover else None,
-        tuple(media_metadata),
-        package.page_progression_direction,
-        tuple((prefix_map[key], uri) for key, uri in package.prefixes),
-    )
-    return StagedBook(number, prefix, staged_package, mapping)
-
-
-def _item_path(package: EpubPackage, href: str) -> str:
-    resolved = resolve_uri(package.opf_path, href)
-    return resolved[0] if resolved else href

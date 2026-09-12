@@ -1,7 +1,0 @@
-body { font-family: serif; line-height: 1.45; margin: 5%; }
-.title-page, .book-divider, .cover { text-align: center; break-before: page; }
-.title-page h1 { margin-top: 30%; }
-.book-divider h1 { margin-top: 35%; }
-.cover img { max-height: 90vh; max-width: 100%; }
-.bibliography dt { font-weight: bold; margin-top: 1em; }
-.bibliography dd { margin-left: 0; }

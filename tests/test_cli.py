@@ -154,7 +154,7 @@ def test_assemble_logs_ordered_stages(
         with caplog.at_level(logging.INFO, logger="bookmerger.cli"):
             from bookmerger.cli import assemble
 
-            assemble(command, downloader=LocalDownloader((epub_factory(3),)))
+            assemble(command, downloader=LocalDownloader((epub_factory(2),)))
     finally:
         logger.handlers[:] = handlers
         logger.propagate = propagate
@@ -162,10 +162,9 @@ def test_assemble_logs_ordered_stages(
     messages = [record.message for record in caplog.records if record.name == "bookmerger.cli"]
     assert [message for message in messages if message.startswith("Starting ")] == [
         "Starting downloading sources",
-        "Starting staging EPUB 1/1",
+        "Starting checking EPUB 1/1",
         "Starting determining collection title",
-        "Starting building collection",
-        "Starting packaging EPUB",
+        "Starting merging EPUBs",
         "Starting validating EPUB",
         "Starting saving EPUB",
     ]

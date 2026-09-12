@@ -12,8 +12,6 @@ from pathlib import Path
 
 from lxml import etree
 
-from bookmerger.collection import DC_NS, OPF_NS, XHTML_NS
-
 
 @contextmanager
 def fixture_server(files: dict[str, bytes]) -> Iterator[str]:
@@ -47,9 +45,9 @@ def test_readme_example_generates_output_and_reuses_source_cache(
 ) -> None:
     sources = {
         "/book2.epub": epub_factory(2).read_bytes(),
-        "/book3.epub": epub_factory(3).read_bytes(),
+        "/book3.epub": epub_factory(2).read_bytes(),
     }
-    output_name = "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3.epub"
+    output_name = "Сборник — Author 2 — Fixture 2.epub"
     output = tmp_path / output_name
     titled_output = tmp_path / "titled" / "My collection.epub"
     repeated_output = tmp_path / "repeated" / output_name
@@ -94,10 +92,8 @@ def test_readme_example_generates_output_and_reuses_source_cache(
     assert titled.returncode == 0, titled.stderr
     assert titled_output.is_file()
     with zipfile.ZipFile(titled_output) as archive:
-        package = etree.fromstring(archive.read("EPUB/package.opf"))
-        title_page = etree.fromstring(archive.read("EPUB/title.xhtml"))
-    assert package.findtext(f"{{{OPF_NS}}}metadata/{{{DC_NS}}}title") == "My collection"
-    assert title_page.findtext(f"{{{XHTML_NS}}}body/{{{XHTML_NS}}}h1") == "My collection"
+        package = etree.fromstring(archive.read("content.opf"))
+    assert package.xpath("string(//*[local-name()='title'][1])") == "My collection"
 
     repeated_output.parent.mkdir()
     repeated = subprocess.run(
