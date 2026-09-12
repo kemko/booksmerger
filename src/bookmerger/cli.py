@@ -11,7 +11,6 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
 
 from bookmerger.collection import build_collection, generated_title
 from bookmerger.converter import FB2Converter
@@ -35,7 +34,6 @@ class BuildError(RuntimeError):
 
 
 LOGGER = logging.getLogger(__name__)
-T = TypeVar("T")
 
 
 class _Stderr:
@@ -124,7 +122,7 @@ def _configure_logging(verbose: bool) -> None:
     handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
 
 
-def _stage(name: str, operation: Callable[[], T]) -> T:
+def _stage[T](name: str, operation: Callable[[], T]) -> T:
     started = time.monotonic()
     LOGGER.info("Starting %s", name)
     try:
