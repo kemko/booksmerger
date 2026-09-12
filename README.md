@@ -97,6 +97,9 @@ existing output unchanged.
 NCX files outside the OPF directory are rejected because the pinned EpubMerge resolves
 their targets relative to the OPF. Supporting that layout requires an engine update
 and a navigation preservation regression.
+Root-relative manifest paths and NCX targets are also rejected: the pinned engine
+interprets them relative to the OPF directory and can select a different chapter.
+Supporting them requires an engine fix and a resource-target preservation regression.
 Percent-encoded NCX manifest paths are also rejected: the engine reads them without
 decoding and can select a different archive entry. Supporting them requires an engine
 fix and a regression proving that the validated NCX supplies the merged navigation.
@@ -108,6 +111,8 @@ characters requires an engine update and a resource-target preservation regressi
 Bookmerger writes to a temporary file
 beside the requested output, validates it, then publishes it atomically. Existing
 outputs require `--overwrite` to be replaced.
+Reference validation accounts for inherited `xml:base`, including SVG and inline CSS.
+Bases that leave local resources missing after merging cause validation to fail.
 
 To extend an unsupported format or construction, provide a real input sample and a
 regression test that demonstrates the expected result.

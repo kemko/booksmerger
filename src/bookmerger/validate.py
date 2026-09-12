@@ -11,7 +11,13 @@ import tinycss2
 from lxml import etree
 
 from bookmerger.epub import XML_MEDIA_TYPES
-from bookmerger.references import SVG_NS, SVG_URL_ATTRIBUTES, check_css_tokens, check_srcset
+from bookmerger.references import (
+    SVG_NS,
+    SVG_URL_ATTRIBUTES,
+    absolute_uri,
+    check_css_tokens,
+    check_srcset,
+)
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
@@ -61,9 +67,17 @@ def _archive_path(document: str, value: str) -> tuple[str, str] | None:
 
 
 def _check_reference(
-    document: str, value: str, names: set[str], identifiers: dict[str, set[str]]
+    document: str,
+    value: str,
+    names: set[str],
+    identifiers: dict[str, set[str]],
+    base_uri: str | None = None,
 ) -> None:
-    target = _archive_path(document, value)
+    target = (
+        _archive_path("", absolute_uri(document, value, base_uri))
+        if base_uri
+        else _archive_path(document, value)
+    )
     if target is None:
         return
     name, fragment = target
@@ -93,28 +107,30 @@ def _check_documents(
         check_css_tokens(rules, check_stylesheet_url)
     attributes = ("href", "src", "poster", "data")
     for name, root in roots.items():
-
-        def check_css_url(value: str, document: str = name) -> None:
-            _check_reference(document, value, names, identifiers)
-
         for element in root.iter():
             if not isinstance(element.tag, str):
                 continue
+
+            def check_url(
+                value: str, document: str = name, base_uri: str | None = element.base
+            ) -> None:
+                _check_reference(document, value, names, identifiers, base_uri)
+
             for attribute in attributes:
                 if value := element.get(attribute):
-                    _check_reference(name, value, names, identifiers)
+                    check_url(value)
             if value := element.get(f"{{{XLINK_NS}}}href"):
-                _check_reference(name, value, names, identifiers)
+                check_url(value)
             if value := element.get("srcset"):
-                check_srcset(value, check_css_url)
+                check_srcset(value, check_url)
             if value := element.get("style"):
-                check_css_tokens(tinycss2.parse_component_value_list(value), check_css_url)
+                check_css_tokens(tinycss2.parse_component_value_list(value), check_url)
             if etree.QName(element).localname == "style" and element.text:
-                check_css_tokens(tinycss2.parse_stylesheet(element.text), check_css_url)
+                check_css_tokens(tinycss2.parse_stylesheet(element.text), check_url)
             if etree.QName(element).namespace == SVG_NS:
                 for attribute in SVG_URL_ATTRIBUTES:
                     if value := element.get(attribute):
-                        check_css_tokens(tinycss2.parse_component_value_list(value), check_css_url)
+                        check_css_tokens(tinycss2.parse_component_value_list(value), check_url)
 
 
 def _opf_path(archive: zipfile.ZipFile) -> str:

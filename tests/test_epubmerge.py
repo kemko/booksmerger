@@ -181,6 +181,30 @@ def test_merge_rejects_ncx_in_another_directory_before_creating_output(
     assert not output.exists()
 
 
+@pytest.mark.parametrize("document", ["OEBPS/content.opf", "OEBPS/toc.ncx"])
+def test_merge_rejects_root_relative_targets_before_creating_output(
+    epub_factory, edit_epub, tmp_path: Path, document: str
+) -> None:
+    source = epub_factory(2)
+    with zipfile.ZipFile(source) as archive:
+        content = archive.read(document).replace(b"text/chapter.xhtml", b"/text/chapter.xhtml")
+    edit_epub(
+        source,
+        {
+            document: content,
+            "text/chapter.xhtml": (
+                b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Root chapter</title>'
+                b'</head><body><p id="note">Intended root chapter</p></body></html>'
+            ),
+        },
+    )
+    output = tmp_path / "merged.epub"
+
+    with pytest.raises(MergeError, match="source 1: root-relative .* unsupported"):
+        merge_epubs(output, (source,), "Collection")
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("resource", ["toc name.ncx", "оглавление.ncx"])
 def test_merge_rejects_encoded_ncx_path_before_using_unvalidated_navigation(
     epub_factory, edit_epub, tmp_path: Path, resource: str

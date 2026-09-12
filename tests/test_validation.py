@@ -111,6 +111,54 @@ def test_rejects_missing_css_srcset_and_svg_resources(
         validate_epub(replacement)
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        '<image xlink:href="cover.png"/>',
+        '<image href="cover.png"/>',
+        '<image srcset="cover.png 1x"/>',
+        '<rect style="fill: url(cover.png)"/>',
+        "<style>rect { fill: url(cover.png); }</style>",
+        '<rect fill="url(cover.png)"/>',
+    ],
+)
+@pytest.mark.parametrize("base", ["/OEBPS/images/", "missing/"])
+def test_rejects_broken_xml_base_references_after_merge(
+    epub_factory, edit_epub, tmp_path: Path, content: str, base: str
+) -> None:
+    source = epub_factory(2)
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        f'xml:base="{base}"><g>{content}</g></svg>'
+    ).encode()
+    edit_epub(source, {"OEBPS/images/diagram.svg": svg})
+    output = tmp_path / "merged.epub"
+    merge_epubs(output, (source,), "Collection")
+
+    with pytest.raises(ValidationError, match="reference escapes EPUB|missing resource"):
+        validate_epub(output)
+
+
+@pytest.mark.parametrize("base", ["../", "https://example.test/"])
+def test_preserves_relative_and_external_xml_bases(
+    epub_factory, edit_epub, tmp_path: Path, base: str
+) -> None:
+    source = epub_factory(2)
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        f'xml:base="{base}"><g xml:base="text/">'
+        '<a xlink:href="appendix.xhtml#end"/>'
+        '<image style="fill: url(../images/cover.png)"/></g></svg>'
+    ).encode()
+    edit_epub(source, {"OEBPS/images/diagram.svg": svg})
+    output = tmp_path / "merged.epub"
+    merge_epubs(output, (source,), "Collection")
+
+    validate_epub(output)
+    with zipfile.ZipFile(output) as archive:
+        assert archive.read("1/OEBPS/images/diagram.svg") == svg
+
+
 def _empty_ncx(entries: dict[str, bytes]) -> None:
     root = etree.fromstring(entries["toc.ncx"])
     nav_map = root.find(f"{{{NCX_NS}}}navMap")

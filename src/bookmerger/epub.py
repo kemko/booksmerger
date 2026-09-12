@@ -5,6 +5,7 @@ from __future__ import annotations
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 from lxml import etree
 
@@ -270,6 +271,8 @@ def validate_merge_input(path: Path) -> EpubPackage:
                 resolved = resolve_uri(package.opf_path, item.href)
                 if resolved is None or resolved[1] or resolved[2] or resolved[0] not in names:
                     raise EpubError(f"missing manifest resource: {item.href}")
+                if urlsplit(item.href).path.startswith("/"):
+                    raise EpubError("root-relative manifest paths are unsupported by EpubMerge")
                 # The pinned engine emits decoded paths as hrefs without URI escaping.
                 if any(character in resolved[0] for character in "%?#"):
                     raise EpubError(f"unsupported URI characters in manifest path: {item.href}")
@@ -327,6 +330,9 @@ def _validate_ncx(
             or not contents[0].get("src")
         ):
             raise EpubError("NCX navPoint is incomplete")
-        target = resolve_uri(ncx_path, contents[0].get("src"))
+        src = contents[0].get("src")
+        target = resolve_uri(ncx_path, src)
         if target is None or target[0] not in names:
             raise EpubError("NCX refers to a missing or external resource")
+        if urlsplit(src).path.startswith("/"):
+            raise EpubError("root-relative NCX targets are unsupported by EpubMerge")
