@@ -59,9 +59,13 @@ the collection does not claim a work's ISBN.
 
 Downloads are limited to 100 MiB per source. ZIP input is limited to 10,000 entries
 and 500 MiB expanded size. Catalog pages, authenticated sources, HTML, unsafe or
-ambiguous ZIPs, DRM, and obfuscated fonts are unsupported. Conflicting media-overlay
-settings that cannot apply to one collection are rejected. A source error stops the
-build and leaves an existing output unchanged. Bookmerger writes to a temporary file
+ambiguous ZIPs, DRM, and obfuscated fonts are unsupported. Source layout, orientation,
+spread, and flow defaults are retained per spine item. Conflicting page progression
+directions or media-overlay settings that cannot apply to one collection are rejected.
+Other package rendition settings, including the deprecated rendition viewport, are
+rejected; supporting them requires a source fixture and a preservation test.
+A source error stops the build and leaves an existing output unchanged.
+Bookmerger writes to a temporary file
 beside the requested output, validates it, then publishes it atomically. Existing
 outputs require `--overwrite` to be replaced.
 

@@ -10,6 +10,8 @@ from urllib.parse import unquote, urlsplit
 
 from lxml import etree
 
+from bookmerger.epub import XML_MEDIA_TYPES
+
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
 EPUB_NS = "http://www.idpf.org/2007/ops"
@@ -20,23 +22,6 @@ class ValidationError(RuntimeError):
     """The generated EPUB has a broken package or reference."""
 
 
-_MEDIA_TYPES = {
-    ".css": "text/css",
-    ".gif": "image/gif",
-    ".jpeg": "image/jpeg",
-    ".jpg": "image/jpeg",
-    ".js": "text/javascript",
-    ".mp3": "audio/mpeg",
-    ".ncx": "application/x-dtbncx+xml",
-    ".otf": "font/otf",
-    ".png": "image/png",
-    ".smil": "application/smil+xml",
-    ".svg": "image/svg+xml",
-    ".ttf": "font/ttf",
-    ".woff": "font/woff",
-    ".woff2": "font/woff2",
-    ".xhtml": "application/xhtml+xml",
-}
 _XML_SUFFIXES = {".ncx", ".opf", ".smil", ".svg", ".xhtml", ".html"}
 _RASTER_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 
@@ -117,7 +102,7 @@ def _opf_path(archive: zipfile.ZipFile) -> str:
     return rootfile.get("full-path")
 
 
-def _check_package(archive: zipfile.ZipFile, names: set[str]) -> None:
+def _check_package(archive: zipfile.ZipFile, names: set[str]) -> dict[str, str]:
     opf_path = _opf_path(archive)
     if opf_path not in names:
         raise ValidationError("EPUB package document is missing")
@@ -132,13 +117,14 @@ def _check_package(archive: zipfile.ZipFile, names: set[str]) -> None:
         raise ValidationError("OPF manifest IDs are not unique")
     item_ids = set(ids)
     nav_paths: set[str] = set()
+    media_types = {opf_path: "application/oebps-package+xml"}
     for item in items:
         href = item.get("href", "")
         target = _archive_path(opf_path, href)
         if target is None or target[0] not in names:
             raise ValidationError(f"missing manifest resource: {href}")
-        suffix = PurePosixPath(target[0]).suffix.lower()
-        expected = _raster_media_type(archive.read(target[0])) or _MEDIA_TYPES.get(suffix)
+        media_types[target[0]] = item.get("media-type", "")
+        expected = _raster_media_type(archive.read(target[0]))
         if expected and item.get("media-type") != expected:
             raise ValidationError(f"incorrect MIME type for {href}")
         if "nav" in (item.get("properties") or "").split():
@@ -156,6 +142,7 @@ def _check_package(archive: zipfile.ZipFile, names: set[str]) -> None:
     for itemref in spine.findall(f"{{{OPF_NS}}}itemref"):
         if itemref.get("idref") not in item_ids:
             raise ValidationError("OPF spine refers to a missing manifest item")
+    return media_types
 
 
 def validate_epub(path: Path, source_directory: Path | None = None) -> None:
@@ -172,12 +159,16 @@ def validate_epub(path: Path, source_directory: Path | None = None) -> None:
             names = {info.filename for info in infos}
             if len(names) != len(infos):
                 raise ValidationError("EPUB has duplicate ZIP paths")
-            _check_package(archive, names)
+            media_types = _check_package(archive, names)
             xml_names = {
                 name
                 for name in names
-                if PurePosixPath(name).suffix.lower() in _XML_SUFFIXES
-                and archive.read(name).lstrip().startswith(b"<")
+                if media_types.get(name) in XML_MEDIA_TYPES
+                or (
+                    name not in media_types
+                    and PurePosixPath(name).suffix.lower() in _XML_SUFFIXES
+                    and archive.read(name).lstrip().startswith(b"<")
+                )
             }
             _check_documents({name: archive.read(name) for name in xml_names}, names)
             if source_directory:

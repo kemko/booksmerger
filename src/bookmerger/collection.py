@@ -461,6 +461,15 @@ def _write_opf(
         if item.media_overlay:
             node.set("media-overlay", item.media_overlay)
     spine_node = etree.SubElement(package, f"{{{OPF_NS}}}spine")
+    directions = {
+        book.package.page_progression_direction
+        for book in books
+        if book.package.page_progression_direction != "default"
+    }
+    if len(directions) > 1:
+        raise CollectionError("conflicting page progression directions cannot share one spine")
+    if directions:
+        spine_node.set("page-progression-direction", directions.pop())
     for item in spine:
         node = etree.SubElement(spine_node, f"{{{OPF_NS}}}itemref", idref=item.idref)
         if not item.linear:

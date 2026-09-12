@@ -16,6 +16,13 @@ from bookmerger.references import ResourceMap, resolve_uri, rewrite_css, rewrite
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
 DC_NS = "http://purl.org/dc/elements/1.1/"
+XML_MEDIA_TYPES = {
+    "application/xhtml+xml",
+    "image/svg+xml",
+    "application/smil+xml",
+    "application/x-dtbncx+xml",
+    "application/oebps-package+xml",
+}
 
 
 def write_epub(directory: Path, output: Path) -> None:
@@ -101,6 +108,7 @@ class EpubPackage:
     metadata: BookMetadata
     cover: str | None
     media_metadata: tuple[bytes, ...] = ()
+    page_progression_direction: str = "default"
 
 
 @dataclass(frozen=True)
@@ -222,11 +230,36 @@ def read_package(path: Path) -> EpubPackage:
         ref not in ids for item in manifest for ref in (item.fallback, item.media_overlay) if ref
     ):
         raise EpubError("OPF manifest refers to a missing fallback or media overlay")
+    rendition = {}
+    allowed = {
+        "rendition:layout": {"reflowable", "pre-paginated"},
+        "rendition:orientation": {"auto", "landscape", "portrait"},
+        "rendition:spread": {"auto", "none", "landscape", "both"},
+        "rendition:flow": {"auto", "paginated", "scrolled-continuous", "scrolled-doc"},
+    }
+    for meta in root.findall(f"{{{OPF_NS}}}metadata/{{{OPF_NS}}}meta"):
+        prop = meta.get("property", "")
+        if not prop.startswith("rendition:"):
+            continue
+        value = (meta.text or "").strip()
+        if prop not in allowed or value not in allowed[prop] or meta.get("refines"):
+            raise EpubError(f"unsupported rendition setting: {prop}")
+        if prop in rendition:
+            raise EpubError(f"duplicate rendition setting: {prop}")
+        rendition[prop] = value
+    progression = spine_node.get("page-progression-direction", "default")
+    if progression not in {"default", "ltr", "rtl"}:
+        raise EpubError("invalid page progression direction")
     spine = tuple(
         SpineItem(
             item.get("idref", ""),
             item.get("linear", "yes") != "no",
-            _parts(item.get("properties")),
+            _parts(item.get("properties"))
+            + tuple(
+                f"{prop}-{value}"
+                for prop, value in rendition.items()
+                if not any(token.startswith(prop + "-") for token in _parts(item.get("properties")))
+            ),
         )
         for item in spine_node.findall(f"{{{OPF_NS}}}itemref")
     )
@@ -234,7 +267,7 @@ def read_package(path: Path) -> EpubPackage:
         raise EpubError("OPF spine refers to a missing manifest item")
     navigation = tuple(
         item.href
-        for item in manifest
+        for item in sorted(manifest, key=lambda item: "nav" not in item.properties)
         if "nav" in item.properties or item.media_type == "application/x-dtbncx+xml"
     )
     metadata = _metadata(root)
@@ -255,7 +288,9 @@ def read_package(path: Path) -> EpubPackage:
         for item in root.findall(f"{{{OPF_NS}}}metadata/{{{OPF_NS}}}meta")
         if item.get("property", "").startswith("media:")
     )
-    return EpubPackage(opf_path, manifest, spine, navigation, metadata, cover, media_metadata)
+    return EpubPackage(
+        opf_path, manifest, spine, navigation, metadata, cover, media_metadata, progression
+    )
 
 
 def _xml_type(name: str) -> bool:
@@ -284,6 +319,7 @@ def stage_epub(
         names = [info.filename for info in archive.infolist() if not info.is_dir()]
         pending = [(name, archive.read(name)) for name in names]
     resources = ResourceMap.under(names, prefix).resources
+    media_types = {_item_path(package, item.href): item.media_type for item in package.manifest}
     remote_items: list[ManifestItem] = []
     total = sum(len(data) for _, data in pending)
     downloader = downloader or Downloader()
@@ -325,6 +361,7 @@ def stage_epub(
             destination = f"{prefix}/{folder}/{len(remote_items):04d}{suffix}"
         resources[url] = destination
         resources[final_url] = destination
+        media_types[final_url] = media_type
         pending.append((final_url, data))
         remote_items.append(
             ManifestItem(f"remote-{number:04d}-{len(remote_items)}", destination, media_type)
@@ -338,14 +375,14 @@ def stage_epub(
     for name, data in pending:
         target = directory / mapping.resources[name]
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.suffix.lower() == ".css":
+        media_type = media_types.get(name)
+        if media_type == "text/css" or (media_type is None and target.suffix.lower() == ".css"):
             data = rewrite_css(data, mapping, name)
-        elif _xml_type(target.name):
+        elif media_type in XML_MEDIA_TYPES or (media_type is None and _xml_type(target.name)):
             try:
                 data = rewrite_xml(data, mapping, name)
             except etree.XMLSyntaxError:
-                if PurePosixPath(name).suffix.lower() not in {".html", ".svg"}:
-                    raise EpubError(f"invalid XML resource: {name}") from None
+                raise EpubError(f"invalid XML resource: {name}") from None
         target.write_bytes(data)
     unique = {item.id: f"book-{number:04d}-{item.id}" for item in package.manifest}
     staged_package = EpubPackage(
@@ -374,6 +411,7 @@ def stage_epub(
         package.metadata,
         mapping.resources[_item_path(package, package.cover)] if package.cover else None,
         package.media_metadata,
+        package.page_progression_direction,
     )
     return StagedBook(number, prefix, staged_package, mapping)
 
