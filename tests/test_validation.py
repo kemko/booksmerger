@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
+from bookmerger.converter import FB2Converter
 from bookmerger.merge import merge_epubs
 from bookmerger.validate import ValidationError, validate_epub
 
@@ -112,12 +113,35 @@ def test_rejects_corrupt_epub(epub_factory, tmp_path: Path) -> None:
         validate_epub(broken)
 
 
-@pytest.mark.skipif(not os.environ.get("EPUBCHECK"), reason="EPUBCheck is installed in CI")
-def test_epubcheck_accepts_control_book(epub_factory, tmp_path: Path) -> None:
-    output = merged_epub(epub_factory, tmp_path)
+def _check_with_epubcheck(output: Path) -> None:
     result = subprocess.run(
         ["java", "-jar", os.environ["EPUBCHECK"], str(output)],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(not os.environ.get("EPUBCHECK"), reason="EPUBCheck is installed in CI")
+def test_epubcheck_accepts_control_book(epub_factory, tmp_path: Path) -> None:
+    control = epub_factory(2)
+    _check_with_epubcheck(control)
+    output = tmp_path / "merged.epub"
+    merge_epubs(output, (control,), "Collection")
+    _check_with_epubcheck(output)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("FBC_INTEGRATION") or not os.environ.get("EPUBCHECK"),
+    reason="requires pinned fbc and EPUBCheck",
+)
+def test_epubcheck_accepts_fbc_epubmerge_result(tmp_path: Path) -> None:
+    source = tmp_path / "source.fb2"
+    source.write_bytes(Path("tests/fixtures/book.fb2").read_bytes())
+    converted = tmp_path / "converted.epub"
+    output = tmp_path / "merged.epub"
+
+    FB2Converter().convert(source, converted)
+    merge_epubs(output, (converted,), "FB2 fixture")
+
+    _check_with_epubcheck(output)

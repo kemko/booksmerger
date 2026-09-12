@@ -18,15 +18,42 @@ def isolate_xdg_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 @pytest.fixture
 def epub_factory(tmp_path: Path):
-    def make(version: int, *, svg_cover: bool = False) -> Path:
-        book = tmp_path / f"book{version}.epub"
+    def make(version: int, *, ncx: bool = False, svg_cover: bool = False) -> Path:
+        book = tmp_path / f"book{version}{'-ncx' if ncx else ''}.epub"
         root = "OEBPS"
-        navigation = (
-            '<item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
-            if version == 2
-            else '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+        has_ncx = version == 2 or ncx
+        navigation = "".join(
+            (
+                '<item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
+                if has_ncx
+                else "",
+                '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+                if version == 3
+                else "",
+            )
         )
-        toc_ref = 'toc="toc"' if version == 2 else ""
+        toc_ref = 'toc="toc"' if has_ncx else ""
+        role_metadata = (
+            '<meta refines="#author" property="role" scheme="marc:relators">aut</meta>'
+            '<meta refines="#translator" property="role" scheme="marc:relators">trl</meta>'
+            if version == 3
+            else ""
+        )
+        contributors = (
+            f'<dc:creator id="author">Author {version}</dc:creator>'
+            f'<dc:contributor id="translator">Translator {version}</dc:contributor>'
+            if version == 3
+            else (
+                f'<dc:creator id="author" opf:role="aut">Author {version}</dc:creator>'
+                f'<dc:contributor id="translator" opf:role="trl">Translator {version}</dc:contributor>'
+            )
+        )
+        cover_item = (
+            '<item id="cover" href="images/cover.png" media-type="image/png" properties="cover-image"/>'
+            if version == 3
+            else '<item id="cover" href="images/cover.png" media-type="image/png"/>'
+        )
+        cover_metadata = '<meta name="cover" content="cover"/>' if version == 2 else ""
         entries = {
             "mimetype": b"application/epub+zip",
             "META-INF/container.xml": (
@@ -37,38 +64,38 @@ def epub_factory(tmp_path: Path):
             ).encode(),
             f"{root}/content.opf": (
                 f'<?xml version="1.0" encoding="UTF-8"?><package version="{version}.0" '
-                'unique-identifier="book" xmlns="http://www.idpf.org/2007/opf">'
+                'unique-identifier="book" xmlns="http://www.idpf.org/2007/opf" '
+                'xmlns:opf="http://www.idpf.org/2007/opf">'
                 '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book">id'
                 f"-{version}</dc:identifier><dc:title>Fixture {version}</dc:title>"
-                f'<dc:creator id="author">Author {version}</dc:creator>'
-                f'<dc:contributor id="translator">Translator {version}</dc:contributor>'
+                f"{contributors}"
                 f"<dc:language>{'ru' if version == 2 else 'en'}</dc:language>"
                 "<dc:subject>Shared subject</dc:subject><dc:publisher>Fixture Press</dc:publisher>"
                 f"<dc:rights>Rights {version}</dc:rights>"
-                '<meta refines="#author" property="role" scheme="marc:relators">aut</meta>'
-                '<meta refines="#translator" property="role" scheme="marc:relators">trl</meta>'
+                f"{role_metadata}"
+                f"{cover_metadata}"
                 "</metadata><manifest>"
                 '<item id="chapter" href="text/chapter.xhtml" media-type="application/xhtml+xml"/>'
                 '<item id="css" href="styles/book.css" media-type="text/css"/>'
                 '<item id="appendix" href="text/appendix.xhtml" media-type="application/xhtml+xml"/>'
                 '<item id="font" href="fonts/reader.woff2" media-type="font/woff2"/>'
                 '<item id="audio" href="media/audio.mp3" media-type="audio/mpeg"/>'
-                '<item id="cover" href="images/cover.png" media-type="image/png" properties="cover-image"/>'
+                f"{cover_item}"
                 '<item id="diagram" href="images/diagram.svg" media-type="image/svg+xml"/>'
                 f'{navigation}</manifest><spine {toc_ref}><itemref idref="chapter"/>'
                 '<itemref idref="appendix" linear="no"/></spine></package>'
             ).encode(),
             f"{root}/text/chapter.xhtml": (
                 '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml">'
-                '<head><title>Chapter</title><link rel="stylesheet" href="../styles/book.css"/></head><body><section id="same-id">'
-                '<h1>Chapter</h1><p id="page-1">Text <a id="back" href="#note">1</a>.</p><aside id="note">'
-                '<a href="#back">Return</a></aside><img src="../images/cover.png" alt="cover"/>'
-                '<img src="../images/diagram.svg" alt="diagram"/></section></body></html>'
+                '<head><title>Chapter</title><link rel="stylesheet" href="../styles/book.css"/></head><body><div id="same-id">'
+                '<h1>Chapter</h1><p id="page-1">Text <a id="back" href="#note">1</a>.</p><p id="note">'
+                '<a href="#back">Return</a></p><img src="../images/cover.png" alt="cover"/>'
+                '<img src="../images/diagram.svg" alt="diagram"/></div></body></html>'
             ).encode(),
             f"{root}/styles/book.css": b"p { color: navy; }",
             f"{root}/text/appendix.xhtml": (
-                '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Appendix</title></head><body><p id="end">Appendix</p>'
-                '<audio src="../media/audio.mp3"/></body></html>'
+                '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Appendix</title></head><body>'
+                '<p id="end">Appendix</p><p>Audio</p></body></html>'
             ).encode(),
             f"{root}/fonts/reader.woff2": b"ordinary-font-bytes",
             f"{root}/media/audio.mp3": b"media-bytes",
@@ -77,7 +104,11 @@ def epub_factory(tmp_path: Path):
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><text id="same-id">SVG</text></svg>'
             ).encode(),
             f"{root}/toc.ncx": (
-                '<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/">'
+                '<?xml version="1.0"?><ncx version="2005-1" xml:lang="ru" '
+                'xmlns="http://www.daisy.org/z3986/2005/ncx/"><head>'
+                f'<meta name="dtb:uid" content="id-{version}"/>'
+                '<meta name="dtb:depth" content="2"/></head>'
+                f"<docTitle><text>Fixture {version}</text></docTitle>"
                 '<navMap><navPoint id="n1" playOrder="1"><navLabel><text>Chapter</text></navLabel>'
                 '<content src="text/chapter.xhtml"/><navPoint id="n2" playOrder="2">'
                 '<navLabel><text>Note</text></navLabel><content src="text/chapter.xhtml#note"/>'
@@ -96,12 +127,17 @@ def epub_factory(tmp_path: Path):
         if svg_cover:
             package = entries[f"{root}/content.opf"]
             package = package.replace(
-                b'id="cover" href="images/cover.png" media-type="image/png" properties="cover-image"',
+                cover_item.encode(),
                 b'id="cover-raster" href="images/cover.png" media-type="image/png"',
             ).replace(
                 b'<item id="diagram"',
-                b'<item id="cover" href="images/cover.svg" media-type="image/svg+xml" '
-                b'properties="cover-image"/><item id="diagram"',
+                (
+                    b'<item id="cover" href="images/cover.svg" media-type="image/svg+xml" '
+                    b'properties="cover-image"/><item id="diagram"'
+                    if version == 3
+                    else b'<item id="cover" href="images/cover.svg" media-type="image/svg+xml"/>'
+                    b'<item id="diagram"'
+                ),
             )
             entries[f"{root}/content.opf"] = package
             entries[f"{root}/images/cover.svg"] = (
@@ -109,6 +145,7 @@ def epub_factory(tmp_path: Path):
                 b"<text>Cover</text></svg>"
             )
         with zipfile.ZipFile(book, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("mimetype", entries.pop("mimetype"), compress_type=zipfile.ZIP_STORED)
             for name, data in entries.items():
                 archive.writestr(name, data)
         return book

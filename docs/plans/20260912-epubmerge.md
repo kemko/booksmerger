@@ -137,16 +137,16 @@ tests/test_references.py; tests/test_ebooklib_evaluation.py.
 ### Task 6: Проверить критерии приёмки
 
 Файлы: tests/conftest.py; tests/test_pipeline.py; tests/test_validation.py; .github/workflows/tests.yml.
-- [ ] Добавить корректные EPUB 2 fixtures и сквозной сценарий FB2 → fbc → EpubMerge; проверить
+- [x] Добавить корректные EPUB 2 fixtures и сквозной сценарий FB2 → fbc → EpubMerge; проверить
 последовательность книг и вложенное NCX.
-- [ ] Отдельно проверить EPUB 3 с NCX и отказ для nav-only. Не подменять проверку реального
+- [x] Отдельно проверить EPUB 3 с NCX и отказ для nav-only. Не подменять проверку реального
 движка моками.
-- [ ] Проверять EPUBCheck 5.2.1 на контрольных EPUB 2 и совместимом FB2-сценарии. Для EPUB 3
+- [x] Проверять EPUBCheck 5.2.1 на контрольных EPUB 2 и совместимом FB2-сценарии. Для EPUB 3
 отдельно фиксировать ограничения; не отключать EPUBCheck целиком и не скрывать ошибки
 общим xfail.
-- [ ] Выполнить rtk proxy env FBC_INTEGRATION=1 EPUBCHECK=/absolute/path/epubcheck.jar uv run pytest --cov=bookmerger --cov-report=term-missing
+- [x] Выполнить rtk proxy env FBC_INTEGRATION=1 EPUBCHECK=/absolute/path/epubcheck.jar uv run pytest --cov=bookmerger --cov-report=term-missing
 --cov-fail-under=80.
-- [ ] Выполнить rtk proxy uv run ruff check ., rtk proxy uv run ruff format --check . и rtk proxy uv build. Проверить
+- [x] Выполнить rtk proxy uv run ruff check ., rtk proxy uv run ruff format --check . и rtk proxy uv build. Проверить
 покрытие не ниже 80% с учётом ветвлений.
 
 ### Task 7: Обновить документацию и воспроизводимый пример

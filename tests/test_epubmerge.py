@@ -14,6 +14,15 @@ from bookmerger.converter import FB2Converter
 from bookmerger.download import DownloadLimits
 from bookmerger.merge import MergeError, merge_epubs
 
+NCX_NS = "http://www.daisy.org/z3986/2005/ncx/"
+
+
+def _ncx_book_points(ncx: bytes) -> list[etree._Element]:
+    root = etree.fromstring(ncx)
+    nav_map = root.find(f"{{{NCX_NS}}}navMap")
+    assert nav_map is not None
+    return nav_map.findall(f"{{{NCX_NS}}}navPoint")
+
 
 def test_epubmerge_merges_two_epub2_books_with_ncx(epub_factory, edit_epub, tmp_path: Path) -> None:
     first = epub_factory(2)
@@ -36,6 +45,15 @@ def test_epubmerge_merges_two_epub2_books_with_ncx(epub_factory, edit_epub, tmp_
     assert package.xpath("string(//*[local-name()='title'][1])") == "Merged fixture"
     assert "Fixture 2" in ncx
     assert "Second fixture" in ncx
+    book_points = _ncx_book_points(ncx.encode())
+    assert [
+        point.xpath("string(ncx:navLabel/ncx:text)", namespaces={"ncx": NCX_NS})
+        for point in book_points
+    ] == [
+        "Fixture 2",
+        "Second fixture",
+    ]
+    assert all(point.findall(f"{{{NCX_NS}}}navPoint") for point in book_points)
 
 
 def test_merge_epubs_keeps_order_duplicates_names_and_inputs(
@@ -145,6 +163,20 @@ def test_merge_epubs_rejects_nav_only_and_ambiguous_ncx(
         merge_epubs(tmp_path / "ambiguous.epub", (source,), "Title")
 
 
+def test_merge_epubs_accepts_epub3_with_ncx(epub_factory, tmp_path: Path) -> None:
+    """EPUB 3 sources are supported only through their NCX, not their nav document."""
+    source = epub_factory(3, ncx=True)
+    output = tmp_path / "merged.epub"
+
+    merge_epubs(output, (source,), "EPUB 3 source")
+
+    with zipfile.ZipFile(output) as archive:
+        points = _ncx_book_points(archive.read("toc.ncx"))
+    assert [
+        point.xpath("string(ncx:navLabel/ncx:text)", namespaces={"ncx": NCX_NS}) for point in points
+    ] == ["Fixture 3"]
+
+
 def test_merge_epubs_applies_zip_limits_and_safe_paths(
     epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -163,23 +195,33 @@ def test_merge_epubs_applies_zip_limits_and_safe_paths(
 
 
 @pytest.mark.skipif(not os.environ.get("FBC_INTEGRATION"), reason="requires pinned fbc")
-def test_real_fbc_epub2_merges_with_ncx(tmp_path: Path) -> None:
-    source = tmp_path / "source.fb2"
-    source.write_bytes(Path("tests/fixtures/book.fb2").read_bytes())
-    converted = tmp_path / "converted.epub"
-
-    FB2Converter().convert(source, converted)
-    with zipfile.ZipFile(converted) as archive:
-        opf_name = etree.fromstring(archive.read("META-INF/container.xml")).xpath(
-            "string(//*[local-name()='rootfile']/@full-path)"
+def test_real_fbc_epub2_merges_with_nested_ncx_in_source_order(tmp_path: Path) -> None:
+    converted: list[Path] = []
+    for number, title in enumerate(("First FB2", "Second FB2"), 1):
+        source = tmp_path / f"source-{number}.fb2"
+        source.write_bytes(
+            Path("tests/fixtures/book.fb2").read_bytes().replace(b"FB2 fixture", title.encode())
         )
-        opf = etree.fromstring(archive.read(opf_name))
-        assert opf.get("version") == "2.0"
-        assert opf.xpath("string(//*[local-name()='spine']/@toc)")
-        assert any(name.endswith(".ncx") for name in archive.namelist())
+        target = tmp_path / f"converted-{number}.epub"
+        FB2Converter().convert(source, target)
+        converted.append(target)
+        with zipfile.ZipFile(target) as archive:
+            opf_name = etree.fromstring(archive.read("META-INF/container.xml")).xpath(
+                "string(//*[local-name()='rootfile']/@full-path)"
+            )
+            opf = etree.fromstring(archive.read(opf_name))
+            assert opf.get("version") == "2.0"
+            assert opf.xpath("string(//*[local-name()='spine']/@toc)")
+            assert any(name.endswith(".ncx") for name in archive.namelist())
 
-    merged = BytesIO()
-    doMerge(merged, [str(converted)], titleopt="FB2 fixture", languages=["ru"])
-    with zipfile.ZipFile(merged) as archive:
-        assert "toc.ncx" in archive.namelist()
-        assert "FB2 fixture" in archive.read("toc.ncx").decode()
+    output = tmp_path / "merged.epub"
+    merge_epubs(output, converted, "FB2 collection")
+    with zipfile.ZipFile(output) as archive:
+        points = _ncx_book_points(archive.read("toc.ncx"))
+    assert [
+        point.xpath("string(ncx:navLabel/ncx:text)", namespaces={"ncx": NCX_NS}) for point in points
+    ] == [
+        "First FB2",
+        "Second FB2",
+    ]
+    assert all(point.findall(f"{{{NCX_NS}}}navPoint") for point in points)
