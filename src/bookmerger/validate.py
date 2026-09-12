@@ -17,6 +17,7 @@ from bookmerger.references import SVG_NS, SVG_URL_ATTRIBUTES, _rewrite_css_token
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
 EPUB_NS = "http://www.idpf.org/2007/ops"
+NCX_NS = "http://www.daisy.org/z3986/2005/ncx/"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 
 
@@ -134,6 +135,22 @@ def _opf_path(archive: zipfile.ZipFile) -> str:
     return rootfile.get("full-path")
 
 
+def _check_ncx(archive: zipfile.ZipFile, path: str, names: set[str]) -> None:
+    root = _xml(archive.read(path), path)
+    if root.tag != f"{{{NCX_NS}}}ncx":
+        raise ValidationError("invalid NCX navigation document")
+    nav_maps = root.findall(f"{{{NCX_NS}}}navMap")
+    if len(nav_maps) != 1 or not nav_maps[0].findall(f"{{{NCX_NS}}}navPoint"):
+        raise ValidationError("NCX navigation document has an empty table of contents")
+    for point in nav_maps[0].iter(f"{{{NCX_NS}}}navPoint"):
+        contents = point.findall(f"{{{NCX_NS}}}content")
+        if len(contents) != 1 or not contents[0].get("src"):
+            raise ValidationError("NCX navPoint is incomplete")
+        target = _archive_path(path, contents[0].get("src"))
+        if target is None or target[0] not in names:
+            raise ValidationError("NCX refers to a missing or external resource")
+
+
 def _check_package(archive: zipfile.ZipFile, names: set[str]) -> dict[str, str]:
     opf_path = _opf_path(archive)
     if opf_path not in names:
@@ -148,6 +165,7 @@ def _check_package(archive: zipfile.ZipFile, names: set[str]) -> dict[str, str]:
     if not ids or None in ids or len(ids) != len(set(ids)):
         raise ValidationError("OPF manifest IDs are not unique")
     item_ids = set(ids)
+    manifest_paths: dict[str, tuple[str, str]] = {}
     nav_paths: set[str] = set()
     media_types = {opf_path: "application/oebps-package+xml"}
     for item in items:
@@ -155,25 +173,37 @@ def _check_package(archive: zipfile.ZipFile, names: set[str]) -> dict[str, str]:
         target = _archive_path(opf_path, href)
         if target is None or target[0] not in names:
             raise ValidationError(f"missing manifest resource: {href}")
+        manifest_paths[item.get("id", "")] = (target[0], item.get("media-type", ""))
         media_types[target[0]] = item.get("media-type", "")
         expected = _raster_media_type(archive.read(target[0]))
         if expected and item.get("media-type") != expected:
             raise ValidationError(f"incorrect MIME type for {href}")
         if "nav" in (item.get("properties") or "").split():
             nav_paths.add(target[0])
-    if not nav_paths:
-        raise ValidationError("OPF has no navigation document")
-    for nav_path in nav_paths:
-        nav = _xml(archive.read(nav_path), nav_path)
-        if not nav.xpath(
-            "//*[local-name()='nav' and "
-            "contains(concat(' ', normalize-space(@epub:type), ' '), ' toc ')]",
-            namespaces={"epub": EPUB_NS},
-        ):
-            raise ValidationError("navigation document has no table of contents")
-    for itemref in spine.findall(f"{{{OPF_NS}}}itemref"):
+    spine_items = spine.findall(f"{{{OPF_NS}}}itemref")
+    if not spine_items:
+        raise ValidationError("OPF spine is empty")
+    for itemref in spine_items:
         if itemref.get("idref") not in item_ids:
             raise ValidationError("OPF spine refers to a missing manifest item")
+    ncx_id = spine.get("toc")
+    if ncx_id:
+        ncx = manifest_paths.get(ncx_id)
+        if ncx is None or ncx[1] != "application/x-dtbncx+xml":
+            raise ValidationError("OPF spine/@toc does not refer to an NCX manifest item")
+        _check_ncx(archive, ncx[0], names)
+    else:
+        # Keep validating the pre-EpubMerge EPUB 3 output until the CLI is switched.
+        if not nav_paths:
+            raise ValidationError("OPF has no NCX navigation document")
+        for nav_path in nav_paths:
+            nav = _xml(archive.read(nav_path), nav_path)
+            if not nav.xpath(
+                "//*[local-name()='nav' and "
+                "contains(concat(' ', normalize-space(@epub:type), ' '), ' toc ')]",
+                namespaces={"epub": EPUB_NS},
+            ):
+                raise ValidationError("navigation document has no table of contents")
     return media_types
 
 
