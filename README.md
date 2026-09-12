@@ -17,12 +17,27 @@ uv run bookmerger --help
 Or install the package with `python -m pip install .`. The command is:
 
 ```sh
-bookmerger --title "Collection title" --output collection.epub URL1 URL2
+bookmerger URL1 URL2
 ```
 
 Use `--input-file sources.txt` instead of positional URLs when the list is long.
 The UTF-8 file contains one URL per non-empty line; its order and duplicates are
 preserved. `--input-file` and positional URLs cannot be combined.
+
+`--title` and `--output` are independent optional overrides. Without `--title`,
+bookmerger derives `Сборник — Автор 1, Автор 2 и др. — Произведение 1, Произведение 2 и др.`
+from source metadata: one or two distinct authors and work titles are shown, then
+the first two followed by `и др.`. Only authors are used (not translators or
+editors). Without `--output`, it saves `<title>.epub` in the current directory,
+with unsafe filename characters replaced. Explicit values take priority. An
+existing output needs `--overwrite`, including an automatically named one.
+
+Progress is logged to stderr at INFO level. Use `--verbose` for DEBUG diagnostics:
+
+```sh
+bookmerger --verbose URL1 URL2
+bookmerger --title "My collection" --output result.epub URL1 URL2
+```
 
 ## FB2 converter
 
@@ -31,11 +46,18 @@ in `PATH` is used first. Otherwise bookmerger downloads the official, SHA-256-ch
 release once and stores it in `$XDG_CACHE_HOME/bookmerger/fbc/1.7.0/<os>-<arch>/`
 (`~/.cache/bookmerger/...` when `XDG_CACHE_HOME` is unset). No administrator rights
 are needed. Later FB2 conversions reuse that cached binary, so they do not download
-the converter again; source URLs still need network access for every build.
+the converter again.
 
 Supported converter binaries are macOS, Linux, and Windows on amd64 and arm64.
 Incompatible PATH or cached converters are skipped; bookmerger installs the pinned
 release automatically. Unsupported platforms and installation failures stop the build.
+
+Downloaded source books are cached in `$XDG_CACHE_HOME/bookmerger/sources/`
+(`~/.cache/bookmerger/sources/` when unset), so later builds reuse them even from
+another working directory. The cache has no automatic refresh: remove an entry or
+the `sources` directory to fetch the URL again. It covers source FB2, EPUB, and ZIP
+files only; externally referenced images and CSS are still fetched while preparing
+each EPUB.
 
 ## Output and limits
 
@@ -81,8 +103,11 @@ The regression test creates small EPUB 2 and EPUB 3 books, serves them locally, 
 runs this command unchanged (with `BASE_URL` set to that temporary server):
 
 ```sh
-bookmerger --title "Example collection" --output example.epub "$BASE_URL/book2.epub" "$BASE_URL/book3.epub"
+bookmerger "$BASE_URL/book2.epub" "$BASE_URL/book3.epub"
 ```
+
+It creates `Сборник — Author 2, Author 3 — Fixture 2, Fixture 3.epub`; a later
+run with the same URLs can use the source cache without contacting the server.
 
 Run it with:
 

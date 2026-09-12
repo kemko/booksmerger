@@ -37,12 +37,16 @@ def fixture_server(files: dict[str, bytes]) -> Iterator[str]:
         server.server_close()
 
 
-def test_readme_example_runs_through_local_http_server(epub_factory, tmp_path: Path) -> None:
+def test_readme_example_generates_output_and_reuses_source_cache(
+    epub_factory, tmp_path: Path
+) -> None:
     sources = {
         "/book2.epub": epub_factory(2).read_bytes(),
         "/book3.epub": epub_factory(3).read_bytes(),
     }
-    output = tmp_path / "example.epub"
+    output_name = "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3.epub"
+    output = tmp_path / output_name
+    repeated_output = tmp_path / "repeated" / output_name
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -50,16 +54,9 @@ def test_readme_example_runs_through_local_http_server(epub_factory, tmp_path: P
     }
 
     with fixture_server(sources) as base_url:
+        arguments = [f"{base_url}/book2.epub", f"{base_url}/book3.epub"]
         completed = subprocess.run(
-            [
-                str(Path(sys.executable).with_name("bookmerger")),
-                "--title",
-                "Example collection",
-                "--output",
-                "example.epub",
-                f"{base_url}/book2.epub",
-                f"{base_url}/book3.epub",
-            ],
+            [str(Path(sys.executable).with_name("bookmerger")), *arguments],
             capture_output=True,
             check=False,
             cwd=tmp_path,
@@ -71,3 +68,18 @@ def test_readme_example_runs_through_local_http_server(epub_factory, tmp_path: P
     assert completed.returncode == 0, completed.stderr
     assert output.is_file()
     assert len(list((tmp_path / "cache" / "bookmerger" / "sources").iterdir())) == 2
+
+    repeated_output.parent.mkdir()
+    repeated = subprocess.run(
+        [str(Path(sys.executable).with_name("bookmerger")), *arguments],
+        capture_output=True,
+        check=False,
+        cwd=repeated_output.parent,
+        env=environment,
+        text=True,
+        timeout=30,
+    )
+
+    assert repeated.returncode == 0, repeated.stderr
+    assert repeated_output.is_file()
+    assert "Source cache hit" in repeated.stderr
