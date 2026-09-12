@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,6 +47,7 @@ def test_readme_example_generates_output_and_reuses_source_cache(
     }
     output_name = "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3.epub"
     output = tmp_path / output_name
+    titled_output = tmp_path / "titled" / "My collection.epub"
     repeated_output = tmp_path / "repeated" / output_name
     environment = {
         key: value
@@ -68,6 +70,28 @@ def test_readme_example_generates_output_and_reuses_source_cache(
     assert completed.returncode == 0, completed.stderr
     assert output.is_file()
     assert len(list((tmp_path / "cache" / "bookmerger" / "sources").iterdir())) == 2
+
+    titled_output.parent.mkdir()
+    titled = subprocess.run(
+        [
+            str(Path(sys.executable).with_name("bookmerger")),
+            "--title",
+            "My collection",
+            *arguments,
+        ],
+        capture_output=True,
+        check=False,
+        cwd=titled_output.parent,
+        env=environment,
+        text=True,
+        timeout=30,
+    )
+
+    assert titled.returncode == 0, titled.stderr
+    assert titled_output.is_file()
+    with zipfile.ZipFile(titled_output) as archive:
+        assert "My collection" in archive.read("EPUB/package.opf").decode()
+        assert "My collection" in archive.read("EPUB/title.xhtml").decode()
 
     repeated_output.parent.mkdir()
     repeated = subprocess.run(

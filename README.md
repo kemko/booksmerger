@@ -24,19 +24,20 @@ Use `--input-file sources.txt` instead of positional URLs when the list is long.
 The UTF-8 file contains one URL per non-empty line; its order and duplicates are
 preserved. `--input-file` and positional URLs cannot be combined.
 
-`--title` and `--output` are independent optional overrides. Without `--title`,
-bookmerger derives `Сборник — Автор 1, Автор 2 и др. — Произведение 1, Произведение 2 и др.`
-from source metadata: one or two distinct authors and work titles are shown, then
-the first two followed by `и др.`. Only authors are used (not translators or
-editors). Without `--output`, it saves `<title>.epub` in the current directory,
-with unsafe filename characters replaced. Explicit values take priority. An
-existing output needs `--overwrite`, including an automatically named one.
+`--title` optionally sets both the collection title and the EPUB filename. The file
+is saved as `<title>.epub` in the current directory; unsafe filename characters are
+replaced and its UTF-8 stem is limited to 200 bytes, but the full title remains
+inside the EPUB. Without `--title`, bookmerger derives
+`Сборник — Автор 1, Автор 2 и др. — Произведение 1, Произведение 2 и др.` from source
+metadata: one or two distinct authors and work titles are shown, then the first two
+followed by `и др.`. Only authors are used (not translators or editors). An existing
+output needs `--overwrite`, including an automatically named one.
 
 Progress is logged to stderr at INFO level. Use `--verbose` for DEBUG diagnostics:
 
 ```sh
 bookmerger --verbose URL1 URL2
-bookmerger --title "My collection" --output result.epub URL1 URL2
+bookmerger --title "My collection" URL1 URL2
 ```
 
 ## FB2 converter

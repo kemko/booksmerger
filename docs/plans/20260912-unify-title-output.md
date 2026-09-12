@@ -56,13 +56,13 @@ tests/test_fifth_review_regressions.py, tests/test_sixth_review_regressions.py: 
 
 - Изменить: README.md, AGENTS.md.
 - Изменить: tests/test_readme_example.py.
-- [ ] Описать единый --title, сохранение файла в текущем каталоге, существующие правила
+- [x] Описать единый --title, сохранение файла в текущем каталоге, существующие правила
 безопасного имени и --overwrite.
-- [ ] Заменить примеры с --output на bookmerger --title "My collection" URL1 URL2; ожидаемый файл — My collection.epub.
-- [ ] Расширить существующий тест примера вариантом с --title: проверить имя файла и
+- [x] Заменить примеры с --output на bookmerger --title "My collection" URL1 URL2; ожидаемый файл — My collection.epub.
+- [x] Расширить существующий тест примера вариантом с --title: проверить имя файла и
 название внутри EPUB, сохранив сценарий автоматического имени и повторного
 использования кэша.
-- [ ] Выполнить rtk proxy uv run pytest -q; устранить ошибки перед следующей задачей.
+- [x] Выполнить rtk proxy uv run pytest -q; устранить ошибки перед следующей задачей.
 CLAUDE.md отсутствует; создавать его не требуется.
 
 ### Task 3: Проверить критерии приёмки
