@@ -329,6 +329,32 @@ def test_cache_key_includes_query_and_ignores_fragment(tmp_path: Path) -> None:
     assert len(requests) == 2
 
 
+def test_cache_distinguishes_absent_and_empty_query(tmp_path: Path) -> None:
+    requests: list[bytes] = []
+    payloads = {
+        b"/book": b"<FictionBook><body><p>First</p></body></FictionBook>",
+        b"/book?": b"<FictionBook><body><p>Second</p></body></FictionBook>",
+    }
+    urls = ["https://example.test/book", "https://example.test/book?"]
+    cache = tmp_path / "cache"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.raw_path)
+        return response(request, payloads[request.url.raw_path])
+
+    downloader = Downloader(client=client(httpx.MockTransport(handler)), cache_directory=cache)
+    first = downloader.download_all(urls, tmp_path / "first")
+    assert [item.path.read_bytes() for item in first] == list(payloads.values())
+    assert requests == list(payloads)
+
+    cached = Downloader(
+        client=client(httpx.MockTransport(lambda request: pytest.fail("network used"))),
+        cache_directory=cache,
+    )
+    repeat = cached.download_all([url + "#chapter" for url in urls], tmp_path / "repeat")
+    assert [item.path.read_bytes() for item in repeat] == list(payloads.values())
+
+
 def test_corrupt_or_limited_cache_is_re_downloaded(tmp_path: Path) -> None:
     cache = tmp_path / "cache"
     requests = 0

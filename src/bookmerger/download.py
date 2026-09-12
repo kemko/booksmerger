@@ -292,8 +292,7 @@ class Downloader:
             temporary.unlink(missing_ok=True)
 
     def _cache_path(self, url: str) -> Path:
-        parts = urlsplit(url)
-        key = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+        key = url.partition("#")[0]
         return self.cache_directory / hashlib.sha256(key.encode()).hexdigest()
 
     def _warn_cache(self, url: str, error: OSError) -> None:
