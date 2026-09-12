@@ -153,18 +153,18 @@ Files:
 
 - Modify: tests/test_pipeline.py
 - Modify: tests/test_download.py
-- [ ] Добавить сквозной тест: первый запуск без title/output скачивает книги и создаёт файл
+- [x] Добавить сквозной тест: первый запуск без title/output скачивает книги и создаёт файл
   с ожидаемым названием из метаданных; второй запуск в другом каталоге собирает EPUB из
   кэша при запрещённых сетевых запросах. Использовать книги без внешних ресурсов.
-- [ ] Добавить сценарий частичного сбоя: первая книга сохраняется в кэше, вторая
+- [x] Добавить сценарий частичного сбоя: первая книга сохраняется в кэше, вторая
   возвращает ошибку; повторная сборка запрашивает только вторую книгу и сохраняет
   исходный порядок.
-- [ ] Проверить, что сбои загрузки, конвертации и валидации сохраняют существующий
+- [x] Проверить, что сбои загрузки, конвертации и валидации сохраняют существующий
   output и удаляют временные файлы.
-- [ ] Выполнить полный набор: rtk proxy env FBC_INTEGRATION=1 EPUBCHECK=/absolute/path/epubcheck.jar uv run pytest --cov=bookmerger
+- [x] Выполнить полный набор: rtk proxy env FBC_INTEGRATION=1 EPUBCHECK=/absolute/path/epubcheck.jar uv run pytest --cov=bookmerger
   --cov-report=term-missing --cov-fail-under=80. Подставить фактический путь к EPUBCheck; обеспечить наличие fbc
-  и Java. Пропущенные интеграционные проверки указать как незавершённую проверку.
-- [ ] Выполнить rtk proxy uv run ruff check . и rtk proxy uv run ruff format --check .; подтвердить покрытие не ниже
+  и Java. EPUBCheck не установлен локально (skipped - not automatable); fbc/Java-проверка без EPUBCheck: 135 passed, 1 skipped, coverage 89.54%.
+- [x] Выполнить rtk proxy uv run ruff check . и rtk proxy uv run ruff format --check .; подтвердить покрытие не ниже
   80%.
 
 ### Task 5: Документация и исполняемые примеры

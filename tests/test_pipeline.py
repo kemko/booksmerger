@@ -4,10 +4,11 @@ import os
 import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
 
 from bookmerger.cli import BuildError, Command, assemble
-from bookmerger.download import DownloadedSource
+from bookmerger.download import DownloadedSource, Downloader
 from bookmerger.validate import ValidationError
 
 
@@ -21,6 +22,14 @@ class LocalDownloader:
             DownloadedSource(url, source, "epub")
             for url, source in zip(urls, self.sources, strict=True)
         )
+
+
+def mock_downloader(
+    handler: httpx.MockTransport, cache_directory: Path, *, retries: int = 0
+) -> Downloader:
+    return Downloader(
+        client=httpx.Client(transport=handler), cache_directory=cache_directory, retries=retries
+    )
 
 
 def test_pipeline_publishes_valid_epub_atomically(epub_factory, tmp_path: Path) -> None:
@@ -98,6 +107,117 @@ def test_pipeline_preserves_racing_output(
 
     assert output.read_bytes() == b"racing result"
     assert not list(tmp_path.glob(".result-*.epub"))
+
+
+def test_pipeline_reuses_cached_sources_without_title_or_output(
+    epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    books = {
+        "/one": epub_factory(2).read_bytes(),
+        "/two": epub_factory(3).read_bytes(),
+    }
+    requested: list[str] = []
+
+    def first_handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        return httpx.Response(200, content=books[request.url.path], request=request)
+
+    cache = tmp_path / "cache"
+    urls = ("https://example.test/one", "https://example.test/two")
+    first_directory = tmp_path / "first"
+    first_directory.mkdir()
+    monkeypatch.chdir(first_directory)
+    first = assemble(
+        Command(None, None, urls, False),
+        downloader=mock_downloader(httpx.MockTransport(first_handler), cache),
+    )
+
+    expected_name = "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3.epub"
+    assert first.name == expected_name
+    assert requested == ["/one", "/two"]
+
+    second_directory = tmp_path / "second"
+    second_directory.mkdir()
+    monkeypatch.chdir(second_directory)
+    second = assemble(
+        Command(None, None, urls, False),
+        downloader=mock_downloader(
+            httpx.MockTransport(lambda request: pytest.fail(f"network used: {request.url}")), cache
+        ),
+    )
+
+    assert second.name == expected_name
+    assert second.is_file()
+
+
+def test_pipeline_retries_only_failed_source_and_preserves_output(
+    epub_factory, tmp_path: Path
+) -> None:
+    books = {"/one": epub_factory(2).read_bytes(), "/two": epub_factory(3).read_bytes()}
+    cache = tmp_path / "cache"
+    output = tmp_path / "collection.epub"
+    output.write_bytes(b"old result")
+    urls = ("https://example.test/one", "https://example.test/two")
+
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/one":
+            return httpx.Response(200, content=books["/one"], request=request)
+        return httpx.Response(404, content=b"missing", request=request)
+
+    with pytest.raises(BuildError, match=r"book 2/2"):
+        assemble(
+            Command("Collection", output, urls, True),
+            downloader=mock_downloader(httpx.MockTransport(failing_handler), cache),
+        )
+
+    assert output.read_bytes() == b"old result"
+    requested: list[str] = []
+
+    def retry_handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        assert request.url.path == "/two"
+        return httpx.Response(200, content=books["/two"], request=request)
+
+    assemble(
+        Command("Collection", output, urls, True),
+        downloader=mock_downloader(httpx.MockTransport(retry_handler), cache),
+    )
+
+    assert requested == ["/two"]
+    with zipfile.ZipFile(output) as archive:
+        navigation = archive.read("EPUB/nav.xhtml").decode()
+    assert navigation.index("Fixture 2") < navigation.index("Fixture 3")
+    assert not list(tmp_path.glob(".collection-*.epub"))
+
+
+def test_pipeline_keeps_existing_output_when_conversion_fails(tmp_path: Path) -> None:
+    source = tmp_path / "source.fb2"
+    source.write_bytes(b"source")
+    output = tmp_path / "collection.epub"
+    output.write_bytes(b"old result")
+    converted: list[Path] = []
+
+    class FailingConverter:
+        def convert(self, _: Path, target: Path) -> None:
+            converted.append(target)
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"partial EPUB")
+            raise RuntimeError("conversion failed")
+
+    class FB2Downloader:
+        def download_all(self, urls: tuple[str, ...], _: Path) -> tuple[DownloadedSource, ...]:
+            return (DownloadedSource(urls[0], source, "fb2"),)
+
+    with pytest.raises(BuildError, match="conversion failed"):
+        assemble(
+            Command("Collection", output, ("one",), True),
+            downloader=FB2Downloader(),  # type: ignore[arg-type]
+            converter=FailingConverter(),  # type: ignore[arg-type]
+        )
+
+    assert output.read_bytes() == b"old result"
+    assert converted and not converted[0].exists()
+    assert not list(tmp_path.glob(".collection-*.epub"))
 
 
 @pytest.mark.skipif(not os.environ.get("FBC_INTEGRATION"), reason="requires pinned fbc")

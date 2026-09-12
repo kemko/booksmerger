@@ -381,15 +381,32 @@ def test_cache_errors_warn_and_later_download_failure_keeps_cached_source(tmp_pa
 
 def test_removes_prior_sources_when_a_later_source_fails(tmp_path: Path) -> None:
     payloads = iter([FB2, HTML])
-    downloader = Downloader(
-        client=client(httpx.MockTransport(lambda request: response(request, next(payloads))))
-    )
+    requested: list[str] = []
+
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        return response(request, next(payloads))
+
+    downloader = Downloader(client=client(httpx.MockTransport(failing_handler)))
+    urls = ["https://example.test/one", "https://example.test/two"]
 
     with pytest.raises(DownloadError):
-        downloader.download_all(["https://example.test/one", "https://example.test/two"], tmp_path)
+        downloader.download_all(urls, tmp_path)
 
     assert not list(tmp_path.glob("source-*"))
-    assert list((tmp_path / "cache" / "bookmerger" / "sources").iterdir())
+    cache = tmp_path / "cache" / "bookmerger" / "sources"
+    assert list(cache.iterdir())
+
+    def retry_handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        assert request.url.path == "/two"
+        return response(request, FB2)
+
+    retry = Downloader(client=client(httpx.MockTransport(retry_handler)))
+    result = retry.download_all(urls, tmp_path / "retry")
+
+    assert requested == ["/one", "/two", "/two"]
+    assert [item.url for item in result] == urls
 
 
 @pytest.mark.parametrize(
