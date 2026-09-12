@@ -8,9 +8,11 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
+import tinycss2
 from lxml import etree
 
 from bookmerger.epub import XML_MEDIA_TYPES
+from bookmerger.references import SVG_NS, SVG_URL_ATTRIBUTES, _rewrite_css_tokens
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
@@ -83,12 +85,23 @@ def _check_documents(contents: dict[str, bytes], names: set[str]) -> None:
         identifiers[name] = set(ids)
     attributes = ("href", "src", "poster")
     for name, root in roots.items():
+
+        def check_css_url(value: str, document: str = name) -> str:
+            _check_reference(document, value, names, identifiers)
+            return value
+
         for element in root.iter():
             for attribute in attributes:
                 if value := element.get(attribute):
                     _check_reference(name, value, names, identifiers)
             if value := element.get(f"{{{XLINK_NS}}}href"):
                 _check_reference(name, value, names, identifiers)
+            if isinstance(element.tag, str) and etree.QName(element).namespace == SVG_NS:
+                for attribute in SVG_URL_ATTRIBUTES:
+                    if value := element.get(attribute):
+                        _rewrite_css_tokens(
+                            tinycss2.parse_component_value_list(value), check_css_url
+                        )
 
 
 def _opf_path(archive: zipfile.ZipFile) -> str:

@@ -59,6 +59,7 @@ class FB2Metadata:
 
     title: str | None
     translators: tuple[str, ...]
+    details: tuple[tuple[str, str], ...] = ()
 
 
 def _release() -> FbcRelease:
@@ -253,7 +254,23 @@ def fb2_metadata(path: Path) -> FB2Metadata:
         for translator in root.xpath("//*[local-name()='title-info']/*[local-name()='translator']")
         if (name := _person(translator))
     )
-    return FB2Metadata(title or None, translators)
+    details = []
+    for element in root.xpath(
+        "./*[local-name()='description']/*[local-name()='publish-info']//* | "
+        "./*[local-name()='description']/*[local-name()='custom-info'] | "
+        "./*[local-name()='description']/*[local-name()='title-info']"
+        "//*[local-name()='sequence']"
+    ):
+        field = etree.QName(element).localname
+        parent = etree.QName(element.getparent()).localname
+        value = " ".join(element.itertext()).strip()
+        attributes = "; ".join(
+            f"{etree.QName(key).localname}={value}" for key, value in element.attrib.items()
+        )
+        value = "; ".join(part for part in (value, attributes) if part)
+        if value:
+            details.append((f"fb2:{parent}/{field}", value))
+    return FB2Metadata(title or None, translators, tuple(details))
 
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
@@ -273,7 +290,7 @@ def _opf_path(archive: zipfile.ZipFile) -> str:
 
 
 def _restore_epub(output: Path, images: tuple[FB2Image, ...], metadata: FB2Metadata) -> None:
-    """Restore source image bytes and translator metadata in fbc's EPUB."""
+    """Restore source images, translators, and publication details in fbc's EPUB."""
     with zipfile.ZipFile(output) as source:
         opf_name = _opf_path(source)
         try:
@@ -329,6 +346,16 @@ def _restore_epub(output: Path, images: tuple[FB2Image, ...], metadata: FB2Metad
             available.remove(item)
         package_metadata = opf.find(f"{{{OPF_NS}}}metadata")
         if package_metadata is not None:
+            existing_details = {
+                (item.get("name"), item.get("content"))
+                for item in package_metadata.findall(f"{{{OPF_NS}}}meta")
+            }
+            for field, value in metadata.details:
+                if (field, value) not in existing_details:
+                    etree.SubElement(
+                        package_metadata, f"{{{OPF_NS}}}meta", name=field, content=value
+                    )
+                    existing_details.add((field, value))
             translator_ids = {
                 item.get("refines", "").removeprefix("#")
                 for item in package_metadata

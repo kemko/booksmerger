@@ -13,6 +13,20 @@ from lxml import etree
 
 XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
 XML_BASE = "{http://www.w3.org/XML/1998/namespace}base"
+SVG_NS = "http://www.w3.org/2000/svg"
+SVG_URL_ATTRIBUTES = (
+    "fill",
+    "stroke",
+    "filter",
+    "clip-path",
+    "mask",
+    "marker",
+    "marker-start",
+    "marker-mid",
+    "marker-end",
+    "cursor",
+    "color-profile",
+)
 
 
 def is_external(uri: str) -> bool:
@@ -202,12 +216,16 @@ def rewrite_xml(data: bytes, mapping: ResourceMap, document: str) -> bytes:
             if replacement != element.text:
                 element.text = replacement
                 changed = True
-        if element.get("style"):
-            replacement = rewrite_css(
-                element.get("style").encode(), mapping, document, base, inline=True
-            ).decode()
-            if replacement != element.get("style"):
-                element.set("style", replacement)
+        css_attributes = ("style",)
+        if etree.QName(element).namespace == SVG_NS:
+            css_attributes += SVG_URL_ATTRIBUTES
+        for attribute in css_attributes:
+            value = element.get(attribute)
+            if not value:
+                continue
+            replacement = rewrite_css(value.encode(), mapping, document, base, inline=True).decode()
+            if replacement != value:
+                element.set(attribute, replacement)
                 changed = True
         for child in element:
             visit(child, base)
