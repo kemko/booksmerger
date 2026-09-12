@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import posixpath
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 
@@ -10,152 +12,213 @@ import tinycss2
 from lxml import etree
 
 XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
+XML_BASE = "{http://www.w3.org/XML/1998/namespace}base"
 
 
 def is_external(uri: str) -> bool:
-    """Whether *uri* must not be resolved inside an EPUB archive."""
     parts = urlsplit(uri)
-    return bool(parts.scheme or parts.netloc) or uri.startswith("//") or uri.startswith("data:")
+    return bool(parts.scheme or parts.netloc)
 
 
 def _normal_path(path: str) -> str:
-    value = posixpath.normpath(unquote(path)).lstrip("/")
-    if value in {"", "."} or value == ".." or value.startswith("../"):
+    value = posixpath.normpath(path).lstrip("/")
+    if value in {"", ".", ".."} or value.startswith("../"):
         raise ValueError(f"unsafe EPUB URI path: {path!r}")
     return value
+
+
+def absolute_uri(document: str, uri: str, base_uri: str | None = None) -> str:
+    base = document if is_external(document) else quote(document, safe="/")
+    if base_uri:
+        base = urljoin(base, base_uri)
+    return urljoin(base, uri)
 
 
 def resolve_uri(
     document: str, uri: str, base_uri: str | None = None
 ) -> tuple[str, str, str] | None:
-    """Resolve an internal URI to archive path, query and fragment.
-
-    URI percent encoding is decoded only for the archive lookup; callers can
-    retain canonical encoding when writing a reference back out.
-    """
-    if not uri or is_external(uri):
+    """Resolve URI encoding once, keeping literal archive names distinct."""
+    value = absolute_uri(document, uri, base_uri)
+    if is_external(value):
         return None
-    base = urljoin(document, base_uri) if base_uri else document
-    if is_external(base):
-        return None
-    parts = urlsplit(urljoin(base, uri))
-    path = _normal_path(parts.path or document)
-    return path, parts.query, parts.fragment
+    parts = urlsplit(value)
+    return _normal_path(unquote(parts.path)), parts.query, parts.fragment
 
 
 @dataclass(frozen=True)
 class ResourceMap:
-    """Mapping from one book's archive names to its collection names."""
-
     resources: dict[str, str]
+    fetch: Callable[[str], str] | None = None
 
     @classmethod
     def under(cls, names: list[str] | tuple[str, ...], prefix: str) -> ResourceMap:
-        root = prefix.rstrip("/")
-        return cls({_normal_path(name): f"{root}/{_normal_path(name)}" for name in names})
+        return cls({name: f"{prefix.rstrip('/')}/{name}" for name in names})
 
-    def rewrite(self, document: str, uri: str, *, base_uri: str | None = None) -> str:
-        """Return a URI valid from the mapped copy of *document*.
-
-        External links and data URIs are deliberately returned unchanged.
-        """
-        resolved = resolve_uri(document, uri, base_uri)
-        if resolved is None:
-            return uri
-        target, query, fragment = resolved
-        destination = self.resources.get(target)
-        source_document = self.resources.get(_normal_path(document))
+    def rewrite(
+        self, document: str, uri: str, *, base_uri: str | None = None, required: bool = False
+    ) -> str:
+        value = absolute_uri(document, uri, base_uri)
+        parts = urlsplit(value)
+        if is_external(value):
+            if not required or parts.scheme == "data":
+                return value if base_uri or is_external(document) else uri
+            if parts.scheme not in {"http", "https"}:
+                raise ValueError("unsupported external resource scheme")
+            key = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+            destination = self.resources.get(key)
+            if destination is None:
+                if self.fetch is None:
+                    raise ValueError("external resource requires a downloader")
+                destination = self.fetch(key)
+        else:
+            key = _normal_path(unquote(parts.path))
+            destination = self.resources.get(key)
+        source_document = self.resources.get(document)
         if destination is None or source_document is None:
             return uri
+        if base_uri is None and not is_external(value):
+            unchanged = resolve_uri(source_document, uri)
+            if unchanged and unchanged[0] == destination:
+                return uri
         relative = posixpath.relpath(destination, posixpath.dirname(source_document))
-        return urlunsplit(("", "", quote(relative, safe="/%:@"), query, fragment))
+        # A fetched URL's query belongs to the request, not its local filename.
+        query = "" if is_external(value) else parts.query
+        return urlunsplit(("", "", quote(relative, safe="/"), query, parts.fragment))
 
 
-def _base_uri(root: etree._Element, document: str) -> str:
-    bases = root.xpath("//*[local-name()='base' and @href]")
-    return bases[0].get("href") if bases else document
-
-
-def _rewrite_srcset(value: str, mapping: ResourceMap, document: str, base: str) -> str:
+def _rewrite_srcset(value: str, rewrite: Callable[[str], str]) -> str:
     entries = []
-    candidates = value.split(",")
-    while candidates:
-        candidate = candidates.pop(0)
-        if candidate.lstrip().startswith("data:"):
-            candidate = ",".join((candidate, *candidates))
-            candidates.clear()
-        parts = candidate.strip().split(None, 1)
-        if not parts:
-            continue
-        rewritten = mapping.rewrite(document, parts[0], base_uri=base)
-        entries.append(" ".join((rewritten, *parts[1:])))
+    # Commas inside a data URL belong to its URL token, not to the separator.
+    for match in re.finditer(r"(?:^|,)[\s,]*(data:[^\s]+|[^\s,]+)([^,]*)", value):
+        uri, descriptor = match.groups()
+        entries.append(rewrite(uri.rstrip(",")) + descriptor)
     return ", ".join(entries)
 
 
-def _rewrite_css_tokens(
-    tokens: list[object], mapping: ResourceMap, document: str, base: str
-) -> bool:
+def _rewrite_css_tokens(tokens: list[object], rewrite: Callable[[str], str]) -> bool:
     changed = False
     for token in tokens:
         if token.type == "url":
-            replacement = mapping.rewrite(document, token.value, base_uri=base)
+            replacement = rewrite(token.value)
             if replacement != token.value:
                 token.value = replacement
-                token.representation = f'url("{replacement}")'
+                token.representation = (
+                    'url("' + tinycss2.serializer.serialize_string_value(replacement) + '")'
+                )
                 changed = True
         elif token.type == "function" and token.lower_name == "url":
-            raw = tinycss2.serialize(token.arguments).strip().strip("\"'")
-            replacement = mapping.rewrite(document, raw, base_uri=base)
-            if replacement != raw:
-                token.arguments = tinycss2.parse_component_value_list(f'"{replacement}"')
-                changed = True
-        if hasattr(token, "content") and token.content is not None:
-            changed |= _rewrite_css_tokens(token.content, mapping, document, base)
-        if hasattr(token, "arguments") and token.type != "function":
-            changed |= _rewrite_css_tokens(token.arguments, mapping, document, base)
+            arguments = [
+                part for part in token.arguments if part.type not in {"whitespace", "comment"}
+            ]
+            if len(arguments) == 1 and arguments[0].type == "string":
+                raw = arguments[0].value
+                replacement = rewrite(raw)
+                if replacement != raw:
+                    escaped = tinycss2.serializer.serialize_string_value(replacement)
+                    token.arguments = tinycss2.parse_component_value_list('"' + escaped + '"')
+                    changed = True
+        if token.type == "at-rule" and token.lower_at_keyword == "import":
+            for part in token.prelude:
+                if part.type == "string":
+                    replacement = rewrite(part.value)
+                    if replacement != part.value:
+                        part.value = replacement
+                        part.representation = (
+                            '"' + tinycss2.serializer.serialize_string_value(replacement) + '"'
+                        )
+                        changed = True
+                    break
+        for attribute in ("prelude", "content", "arguments"):
+            children = getattr(token, attribute, None)
+            if children is not None:
+                changed |= _rewrite_css_tokens(children, rewrite)
     return changed
 
 
-def rewrite_css(data: bytes, mapping: ResourceMap, document: str) -> bytes:
-    """Rewrite CSS ``url()`` and ``@import`` targets without changing other files."""
-    text = data.decode("utf-8")
-    rules = tinycss2.parse_stylesheet(text, skip_comments=False, skip_whitespace=False)
-    changed = _rewrite_css_tokens(rules, mapping, document, document)
-    return tinycss2.serialize(rules).encode() if changed else data
+def rewrite_css(
+    data: bytes,
+    mapping: ResourceMap,
+    document: str,
+    base_uri: str | None = None,
+    *,
+    inline: bool = False,
+) -> bytes:
+    encoding_name = "utf-8"
+    if inline:
+        rules = tinycss2.parse_component_value_list(data.decode("utf-8"))
+    else:
+        rules, encoding = tinycss2.parse_stylesheet_bytes(
+            data, skip_comments=False, skip_whitespace=False
+        )
+        encoding_name = encoding.codec_info.name
+    changed = _rewrite_css_tokens(
+        rules, lambda uri: mapping.rewrite(document, uri, base_uri=base_uri, required=True)
+    )
+    return tinycss2.serialize(rules).encode(encoding_name) if changed else data
 
 
 def rewrite_xml(data: bytes, mapping: ResourceMap, document: str) -> bytes:
-    """Rewrite common EPUB XML references, retaining bytes if nothing changes."""
+    """Resolve all references before removing HTML/XML base declarations."""
     parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
     root = etree.fromstring(data, parser)
-    base = _base_uri(root, document)
+    bases = root.xpath("//*[local-name()='base' and @href]")
+    html_base = bases[0].get("href") if bases else None
     changed = False
-    for element in root.iter():
-        for name in ("href", "src", XLINK_HREF):
-            value = element.get(name)
-            is_base_href = etree.QName(element).localname == "base" and name == "href"
-            if value is not None and not is_base_href:
-                replacement = mapping.rewrite(document, value, base_uri=base)
+
+    def visit(element: etree._Element, base: str | None) -> None:
+        nonlocal changed
+        if not isinstance(element.tag, str):
+            return
+        local = etree.QName(element).localname
+        if element.get(XML_BASE) is not None:
+            base = absolute_uri(document, element.get(XML_BASE), base)
+            if not is_external(base):
+                base = "/" + base.lstrip("/")
+        if local != "base":
+            for name in ("href", "src", XLINK_HREF, "poster", "data"):
+                value = element.get(name)
+                if value is None:
+                    continue
+                required = name in {"src", "poster", "data"} or local in {
+                    "image",
+                    "use",
+                    "link",
+                    "item",
+                }
+                replacement = mapping.rewrite(document, value, base_uri=base, required=required)
                 if replacement != value:
                     element.set(name, replacement)
                     changed = True
-        srcset = element.get("srcset")
-        if srcset is not None:
-            replacement = _rewrite_srcset(srcset, mapping, document, base)
-            if replacement != srcset:
+        if element.get("srcset") is not None:
+            replacement = _rewrite_srcset(
+                element.get("srcset"),
+                lambda uri: mapping.rewrite(document, uri, base_uri=base, required=True),
+            )
+            if replacement != element.get("srcset"):
                 element.set("srcset", replacement)
                 changed = True
-        if etree.QName(element).localname == "style" and element.text:
-            replacement = rewrite_css(element.text.encode(), mapping, document).decode()
+        if local == "style" and element.text:
+            replacement = rewrite_css(element.text.encode(), mapping, document, base).decode()
             if replacement != element.text:
                 element.text = replacement
                 changed = True
-        style = element.get("style")
-        if style:
-            replacement = rewrite_css(style.encode(), mapping, document).decode()
-            if replacement != style:
+        if element.get("style"):
+            replacement = rewrite_css(
+                element.get("style").encode(), mapping, document, base, inline=True
+            ).decode()
+            if replacement != element.get("style"):
                 element.set("style", replacement)
                 changed = True
+        for child in element:
+            visit(child, base)
+        if XML_BASE in element.attrib:
+            del element.attrib[XML_BASE]
+            changed = True
+
+    visit(root, html_base)
+    for base in bases:
+        base.getparent().remove(base)
+        changed = True
     if not changed:
         return data
     return etree.tostring(root, xml_declaration=data.startswith(b"<?xml"), encoding="utf-8")

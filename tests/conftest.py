@@ -7,8 +7,7 @@ from pathlib import Path
 import pytest
 
 PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
-    "KSbP8wAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
 )
 
 
@@ -110,3 +109,70 @@ def epub_factory(tmp_path: Path):
         return book
 
     return make
+
+
+@pytest.fixture
+def edit_epub():
+    def edit(path: Path, updates: dict[str, bytes]) -> Path:
+        with zipfile.ZipFile(path) as source:
+            entries = {name: source.read(name) for name in source.namelist()}
+        entries.update(updates)
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for name, data in entries.items():
+                target.writestr(name, data)
+        return path
+
+    return edit
+
+
+@pytest.fixture
+def rich_fb2(tmp_path: Path) -> Path:
+    from lxml import etree
+
+    source = etree.parse("tests/fixtures/book.fb2")
+    ns = "http://www.gribuser.ru/xml/fictionbook/2.0"
+    xlink = "http://www.w3.org/1999/xlink"
+    section = source.find(f".//{{{ns}}}body/{{{ns}}}section")
+    # Two distinct PNGs with IDs containing extensions, plus a vector illustration.
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return (
+            struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        )
+
+    second = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\0\0\xff\0\xff"))
+        + chunk(b"IEND", b"")
+    )
+    images = [
+        ("one.png", "image/png", PNG),
+        ("two.png", "image/png", second),
+        (
+            "diagram.svg",
+            "image/svg+xml",
+            b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text id="label">Vector</text></svg>',
+        ),
+    ]
+    source.getroot().remove(source.find(f"{{{ns}}}binary"))
+    source.find(f".//{{{ns}}}coverpage/{{{ns}}}image").set(f"{{{xlink}}}href", "#one.png")
+    for name, mime, data in images:
+        image = etree.Element(f"{{{ns}}}image")
+        section.insert(2, image)
+        image.set(f"{{{xlink}}}href", f"#{name}")
+        binary = etree.SubElement(source.getroot(), f"{{{ns}}}binary", id=name)
+        binary.set("content-type", mime)
+        binary.text = base64.b64encode(data).decode()
+    child = etree.SubElement(section, f"{{{ns}}}section", id="nested")
+    etree.SubElement(
+        etree.SubElement(child, f"{{{ns}}}title"), f"{{{ns}}}p"
+    ).text = "Nested chapter"
+    etree.SubElement(child, f"{{{ns}}}p").text = "Nested text"
+    title_info = source.find(f".//{{{ns}}}title-info")
+    etree.SubElement(title_info, f"{{{ns}}}lang").text = "en"
+    result = tmp_path / "rich.fb2"
+    source.write(result, encoding="utf-8", xml_declaration=True)
+    return result

@@ -160,6 +160,15 @@ class Downloader:
         self.retries = retries
         self.client = client
 
+    def resource(self, url: str, temporary: Path) -> tuple[bytes, str, str]:
+        """Fetch an embedded resource with the same limits as source downloads."""
+        if urlsplit(url).scheme not in {"http", "https"}:
+            raise _error(url, "only HTTP(S) resources are supported")
+        try:
+            return self._fetch(url, temporary)
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def download_all(self, urls: Sequence[str], directory: Path) -> tuple[DownloadedSource, ...]:
         directory.mkdir(parents=True, exist_ok=True)
         downloaded: list[DownloadedSource] = []
@@ -182,7 +191,7 @@ class Downloader:
         temporary = directory / f"source-{index:04d}.download"
         output: Path | None = None
         try:
-            data = self._fetch(url, temporary)
+            data, _, _ = self._fetch(url, temporary)
             format_name, contents = _classify(data, url, self.limits)
             output = directory / f"source-{index:04d}.{format_name}"
             output.write_bytes(contents)
@@ -194,7 +203,7 @@ class Downloader:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _fetch(self, url: str, temporary: Path) -> bytes:
+    def _fetch(self, url: str, temporary: Path) -> tuple[bytes, str, str]:
         owns_client = self.client is None
         client = self.client or httpx.Client(
             verify=True,
@@ -221,7 +230,11 @@ class Downloader:
                                 if size > self.limits.max_download_bytes:
                                     raise _error(url, "download exceeds the allowed size")
                                 target.write(chunk)
-                    return temporary.read_bytes()
+                    return (
+                        temporary.read_bytes(),
+                        response.headers.get("content-type", "").split(";", 1)[0].strip(),
+                        str(response.url),
+                    )
                 except DownloadError:
                     raise
                 except (

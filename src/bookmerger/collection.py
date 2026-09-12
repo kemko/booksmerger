@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from importlib import resources
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlunsplit
+from urllib.parse import quote, urlunsplit
 from uuid import UUID, uuid4
 
 from lxml import etree
@@ -40,7 +40,7 @@ def _write_xhtml(path: Path, root: etree._Element) -> None:
 
 
 def _relative(target: str) -> str:
-    return (PurePosixPath("..") / target).as_posix()
+    return quote((PurePosixPath("..") / target).as_posix(), safe="/")
 
 
 def _normal(value: str) -> str:
@@ -62,14 +62,16 @@ def merged_contributors(books: tuple[StagedBook, ...]) -> tuple[Contributor, ...
 
 def _navigation(
     book: StagedBook, directory: Path, nav_type: str = "toc"
-) -> list[tuple[str, str, list[object]]]:
+) -> list[tuple[str, str, list[object], str]]:
     """Read the source NAV/NCX tree after staging, preserving every depth."""
     for nav_path in book.package.navigation:
         path = directory / nav_path
         if not path.exists():
             continue
         try:
-            root = etree.fromstring(path.read_bytes())
+            root = etree.fromstring(
+                path.read_bytes(), etree.XMLParser(resolve_entities=False, no_network=True)
+            )
         except etree.XMLSyntaxError as error:
             raise CollectionError(f"invalid navigation in book {book.number}") from error
         if etree.QName(root).namespace == NCX_NS:
@@ -78,13 +80,13 @@ def _navigation(
 
             def ncx(
                 node: etree._Element, document: str = nav_path
-            ) -> tuple[str, str, list[object]]:
+            ) -> tuple[str, str, list[object], str]:
                 label = "".join(
                     node.xpath("./n:navLabel/n:text/text()", namespaces={"n": NCX_NS})
                 ).strip()
                 source = node.xpath("string(./n:content/@src)", namespaces={"n": NCX_NS})
                 children = [ncx(item, document) for item in node.findall(f"{{{NCX_NS}}}navPoint")]
-                return label or source, _mapped_target(book, document, source), children
+                return label or source, _mapped_target(document, source), children, ""
 
             nodes = root.findall(f".//{{{NCX_NS}}}navMap/{{{NCX_NS}}}navPoint")
             return [ncx(node) for node in nodes]
@@ -97,46 +99,44 @@ def _navigation(
         if not navs:
             continue
 
-        def xhtml(item: etree._Element, document: str = nav_path) -> tuple[str, str, list[object]]:
-            anchor = item.xpath("./x:a[1]", namespaces={"x": XHTML_NS})
+        def xhtml(
+            item: etree._Element, document: str = nav_path
+        ) -> tuple[str, str, list[object], str]:
+            anchor = item.xpath("./x:a[1] | ./x:span[1]", namespaces={"x": XHTML_NS})
             if not anchor:
-                return "", "", []
+                return "", "", [], ""
             link = anchor[0]
             source = link.get("href", "")
             children = item.xpath("./x:ol/x:li", namespaces={"x": XHTML_NS})
             descendants = [xhtml(child, document) for child in children]
             return (
                 "".join(link.itertext()).strip() or source,
-                _mapped_target(book, document, source),
+                _mapped_target(document, source) if source else "",
                 descendants,
+                link.get(f"{{{EPUB_NS}}}type", ""),
             )
 
         return [xhtml(item) for item in navs[0].xpath("./x:ol/x:li", namespaces={"x": XHTML_NS})]
     return []
 
 
-def _mapped_target(book: StagedBook, document: str, source: str) -> str:
-    original = next(
-        (name for name, staged in book.resource_map.resources.items() if staged == document),
-        None,
-    )
-    if original is None:
-        return source
-    resolved = resolve_uri(original, source)
+def _mapped_target(document: str, source: str) -> str:
+    resolved = resolve_uri(document, source)
     if resolved is None:
         return source
     path, query, fragment = resolved
-    target = book.resource_map.resources.get(path)
-    if target is None:
-        return source
-    return urlunsplit(("", "", _relative(target), query, fragment))
+    return urlunsplit(("", "", _relative(path), query, fragment))
 
 
-def _tree(parent: etree._Element, nodes: list[tuple[str, str, list[object]]]) -> None:
+def _tree(parent: etree._Element, nodes: list[tuple[str, str, list[object], str]]) -> None:
     listing = etree.SubElement(parent, f"{{{XHTML_NS}}}ol")
-    for label, target, children in nodes:
+    for label, target, children, _ in nodes:
         item = etree.SubElement(listing, f"{{{XHTML_NS}}}li")
-        anchor = etree.SubElement(item, f"{{{XHTML_NS}}}a", href=target)
+        anchor = (
+            etree.SubElement(item, f"{{{XHTML_NS}}}a", href=target)
+            if target
+            else etree.SubElement(item, f"{{{XHTML_NS}}}span")
+        )
         anchor.text = label
         if children:
             _tree(item, children)  # type: ignore[arg-type]
@@ -154,12 +154,12 @@ def _auxiliary_navigation(
     etree.SubElement(nav, f"{{{XHTML_NS}}}h2").text = nav_type.replace("-", " ").title()
     listing = etree.SubElement(nav, f"{{{XHTML_NS}}}ol")
     for book, tree in trees:
-        for label, target, _ in tree:
+        for label, target, _, semantic_type in tree:
             item = etree.SubElement(listing, f"{{{XHTML_NS}}}li")
             anchor = etree.SubElement(item, f"{{{XHTML_NS}}}a", href=target)
             anchor.text = f"{book.package.metadata.title}: {label}"
             if nav_type == "landmarks":
-                anchor.set(f"{{{EPUB_NS}}}type", "bodymatter")
+                anchor.set(f"{{{EPUB_NS}}}type", semantic_type)
 
 
 def _book_page(book: StagedBook, directory: Path) -> tuple[str, bool]:
@@ -173,12 +173,41 @@ def _book_page(book: StagedBook, directory: Path) -> tuple[str, bool]:
         paragraph.text = f"{contributor.role}: {contributor.name}"
     if book.package.metadata.publisher:
         etree.SubElement(body, f"{{{XHTML_NS}}}p").text = book.package.metadata.publisher
+    details = etree.SubElement(body, f"{{{XHTML_NS}}}dl")
+    for field, value in book.package.metadata.details:
+        etree.SubElement(details, f"{{{XHTML_NS}}}dt").text = field
+        etree.SubElement(details, f"{{{XHTML_NS}}}dd").text = value
+    back = etree.SubElement(body, f"{{{XHTML_NS}}}a", href="toc.xhtml")
+    back.text = "Contents"
     _write_xhtml(directory / "EPUB" / name, root)
-    cover_in_spine = book.package.cover in {
-        next((item.href for item in book.package.manifest if item.id == spine.idref), "")
-        for spine in book.package.spine
-    }
-    return name, bool(book.package.cover and not cover_in_spine)
+    return name, bool(book.package.cover)
+
+
+def _source_cover(book: StagedBook, directory: Path) -> SpineItem | None:
+    """Reuse a leading cover-only document, retaining its original address."""
+    for entry in book.package.spine:
+        if not entry.linear:
+            continue
+        item = next(item for item in book.package.manifest if item.id == entry.idref)
+        if item.href == book.package.cover:
+            return entry
+        if item.media_type != "application/xhtml+xml":
+            return None
+        root = etree.fromstring(
+            (directory / item.href).read_bytes(),
+            etree.XMLParser(resolve_entities=False, no_network=True),
+        )
+        body = root.find(f"{{{XHTML_NS}}}body")
+        if body is None or "".join(body.itertext()).strip():
+            return None
+        images = body.xpath(
+            "//*[local-name()='img']/@src | //*[local-name()='image']/@*[local-name()='href']"
+        )
+        targets = [resolve_uri(item.href, uri) for uri in images]
+        if targets and all(target and target[0] == book.package.cover for target in targets):
+            return entry
+        return None
+    return None
 
 
 def _cover_page(book: StagedBook, directory: Path) -> str | None:
@@ -258,7 +287,10 @@ def build_collection(
     ]
     for book in books:
         front, needs_cover = _book_page(book, directory)
-        if needs_cover and (cover := _cover_page(book, directory)):
+        existing_cover = _source_cover(book, directory)
+        if existing_cover:
+            spine.append(existing_cover)
+        if needs_cover and not existing_cover and (cover := _cover_page(book, directory)):
             cover_id = f"cover-page-{book.number:04d}"
             additions.append(ManifestItem(cover_id, cover, "application/xhtml+xml"))
             spine.append(SpineItem(cover_id, True))
@@ -281,6 +313,8 @@ def build_collection(
                     for property in item.properties
                     if property not in {"cover-image", "nav"}
                 ),
+                item.fallback,
+                item.media_overlay,
             )
             for item in book.package.manifest
         )
@@ -288,7 +322,11 @@ def build_collection(
             item for item in source_manifest if item.media_type != "application/x-dtbncx+xml"
         )
         source_ids = {item.id for item in source_items}
-        spine.extend(item for item in book.package.spine if item.idref in source_ids)
+        spine.extend(
+            item
+            for item in book.package.spine
+            if item.idref in source_ids and item != existing_cover
+        )
         extras = [
             item
             for item in source_manifest
@@ -310,7 +348,9 @@ def build_collection(
                     if item.href in book.package.navigation
                     else "Supplementary content"
                 )
-                if item.href in book.package.navigation:
+                if item.href in book.package.navigation and item.id not in {
+                    entry.idref for entry in spine
+                }:
                     spine.append(SpineItem(item.id, False))
     _auxiliary_navigation(nav_body, books, directory, "page-list")
     _auxiliary_navigation(nav_body, books, directory, "landmarks")
@@ -327,6 +367,7 @@ def build_collection(
         subjects,
         additions + source_items,
         spine,
+        books,
     )
 
 
@@ -340,6 +381,7 @@ def _write_opf(
     subjects: tuple[str, ...],
     manifest: list[ManifestItem],
     spine: list[SpineItem],
+    books: tuple[StagedBook, ...],
 ) -> Path:
     package = etree.Element(
         f"{{{OPF_NS}}}package",
@@ -367,6 +409,41 @@ def _write_opf(
         role.set("property", "role")
         role.set("scheme", "marc:relators")
         role.text = person.role
+    media_values: dict[str, str] = {}
+    duration = 0.0
+    for book in books:
+        for raw in book.package.media_metadata:
+            meta = etree.fromstring(raw)
+            prop = meta.get("property")
+            refines = meta.get("refines")
+            if refines:
+                meta.set("refines", f"#book-{book.number:04d}-{refines.removeprefix('#')}")
+                metadata.append(meta)
+            elif prop == "media:duration":
+                parts = (meta.text or "").split(":")
+                if len(parts) in {2, 3}:
+                    seconds = 0.0
+                    for part in parts:
+                        seconds = seconds * 60 + float(part)
+                    duration += seconds
+                else:
+                    value = parts[0]
+                    unit = next(
+                        (unit for unit in ("ms", "min", "h", "s") if value.endswith(unit)), ""
+                    )
+                    duration += (
+                        float(value.removesuffix(unit) if unit else value)
+                        * {"ms": 0.001, "min": 60, "h": 3600, "s": 1, "": 1}[unit]
+                    )
+            elif prop in media_values and media_values[prop] != meta.text:
+                raise CollectionError(f"conflicting media overlay setting: {prop}")
+            elif prop not in media_values:
+                media_values[prop] = meta.text
+                metadata.append(meta)
+    if any(book.package.media_metadata for book in books):
+        etree.SubElement(
+            metadata, f"{{{OPF_NS}}}meta", property="media:duration"
+        ).text = f"{duration:g}s"
     manifest_node = etree.SubElement(package, f"{{{OPF_NS}}}manifest")
     for item in manifest:
         href = _relative(item.href) if item.href.startswith("books/") else item.href
@@ -379,10 +456,16 @@ def _write_opf(
         )
         if item.properties:
             node.set("properties", " ".join(item.properties))
+        if item.fallback:
+            node.set("fallback", item.fallback)
+        if item.media_overlay:
+            node.set("media-overlay", item.media_overlay)
     spine_node = etree.SubElement(package, f"{{{OPF_NS}}}spine")
     for item in spine:
         node = etree.SubElement(spine_node, f"{{{OPF_NS}}}itemref", idref=item.idref)
         if not item.linear:
             node.set("linear", "no")
+        if item.properties:
+            node.set("properties", " ".join(item.properties))
     path.write_bytes(etree.tostring(package, xml_declaration=True, encoding="utf-8"))
     return path

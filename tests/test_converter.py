@@ -77,6 +77,7 @@ def test_installs_verified_binary_once_for_concurrent_callers(
     monkeypatch.setitem(
         RELEASE.assets, key, type(asset)(asset.url, hashlib.sha256(archive).hexdigest())
     )
+    monkeypatch.setattr("bookmerger.converter.shutil.which", lambda _: None)
     calls = 0
     lock = threading.Lock()
 
@@ -95,6 +96,7 @@ def test_installs_verified_binary_once_for_concurrent_callers(
         thread.join()
 
     assert calls == 1
+    assert len(results) == 4
     assert len(set(results)) == 1
     assert results[0].is_file()
 
@@ -160,7 +162,18 @@ def test_converter_restores_images_and_translator_metadata(
     )
     metadata.installer.find = lambda: binary  # type: ignore[method-assign]
     metadata.config.write_text("version: 1\n", encoding="utf-8")
+    import tempfile
+
+    temporary_directory = tempfile.TemporaryDirectory
+    work_parents = []
+
+    def workspace(*args, **kwargs):
+        work_parents.append(kwargs.get("dir"))
+        return temporary_directory(*args, **kwargs)
+
+    monkeypatch.setattr("bookmerger.converter.tempfile.TemporaryDirectory", workspace)
     result = metadata.convert(Path("tests/fixtures/book.fb2"), output)
+    assert work_parents == [output.parent]
 
     assert result.translators == ("Trudy Translator",)
     original = fb2_images(Path("tests/fixtures/book.fb2"))[0].data
@@ -198,3 +211,33 @@ def test_converter_reports_timeout(tmp_path: Path) -> None:
     with pytest.raises(FbcError, match="timed out"):
         converter.convert(Path("tests/fixtures/book.fb2"), tmp_path / "out.epub", timeout=0.01)
     assert time.monotonic() - started < 0.5
+
+
+def test_restores_multiple_changed_images_by_filename(tmp_path: Path) -> None:
+    from bookmerger.converter import FB2Image, FB2Metadata, _restore_epub
+
+    output = tmp_path / "converted.epub"
+    output_epub(output)
+    with zipfile.ZipFile(output) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist()}
+    entries["EPUB/package.opf"] = entries["EPUB/package.opf"].replace(
+        b'<item id="cover" href="cover.png" media-type="image/png"/>',
+        b'<item id="one" href="one.png" media-type="image/png"/>'
+        b'<item id="two" href="two.png" media-type="image/png"/>',
+    )
+    entries["EPUB/one.png"] = b"converted one"
+    entries["EPUB/two.png"] = b"converted two"
+    with zipfile.ZipFile(output, "w") as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    _restore_epub(
+        output,
+        (
+            FB2Image("one.png", "image/png", b"original one"),
+            FB2Image("two.png", "image/png", b"original two"),
+        ),
+        FB2Metadata("Test", ()),
+    )
+    with zipfile.ZipFile(output) as archive:
+        assert archive.read("EPUB/one.png") == b"original one"
+        assert archive.read("EPUB/two.png") == b"original two"

@@ -14,7 +14,7 @@ from bookmerger.collection import build_collection
 from bookmerger.converter import FB2Converter
 from bookmerger.download import Downloader
 from bookmerger.epub import stage_epub, write_epub
-from bookmerger.validate import ValidationError, validate_epub
+from bookmerger.validate import validate_epub
 
 
 @dataclass(frozen=True)
@@ -104,7 +104,8 @@ def assemble(
                 progress("Building collection")
             staging = work / "staging"
             books = tuple(
-                stage_epub(source, staging, number) for number, source in enumerate(converted, 1)
+                stage_epub(source, staging, number, downloader=downloader)
+                for number, source in enumerate(converted, 1)
             )
             build_collection(command.title, books, staging)
             descriptor, temp_name = tempfile.mkstemp(
@@ -114,11 +115,18 @@ def assemble(
             temporary = Path(temp_name)
             write_epub(staging, temporary)
             validate_epub(temporary, staging)
-            if output.exists() and not command.overwrite:
-                raise BuildError(f"output already exists: {output} (use --overwrite to replace it)")
-            os.replace(temporary, output)
+            if command.overwrite:
+                os.replace(temporary, output)
+            else:
+                try:
+                    os.link(temporary, output)
+                except FileExistsError:
+                    raise BuildError(
+                        f"output already exists: {output} (use --overwrite to replace it)"
+                    ) from None
+                temporary.unlink()
             temporary = None
-    except (BuildError, ValidationError):
+    except BuildError:
         raise
     except Exception as error:
         raise BuildError(str(error)) from error

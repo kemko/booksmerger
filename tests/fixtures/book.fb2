@@ -2,5 +2,5 @@
 <FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
   <description><title-info><book-title>FB2 fixture</book-title><author><first-name>Ada</first-name><last-name>Author</last-name></author><translator><first-name>Trudy</first-name><last-name>Translator</last-name></translator><annotation><p>Annotation</p></annotation><coverpage><image l:href="#cover" xmlns:l="http://www.w3.org/1999/xlink"/></coverpage></title-info><document-info><id>fixture-fb2</id></document-info></description>
   <body><section id="same-id"><title><p>Chapter</p></title><p>Text <a l:href="#note" xmlns:l="http://www.w3.org/1999/xlink">1</a>.</p><section id="note"><p>Note <a l:href="#same-id" xmlns:l="http://www.w3.org/1999/xlink">return</a></p></section></section></body>
-  <binary id="cover" content-type="image/png">iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/KSbP8wAAAABJRU5ErkJggg==</binary>
+  <binary id="cover" content-type="image/png">iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==</binary>
 </FictionBook>

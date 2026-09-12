@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote
 
 import httpx
 from lxml import etree
@@ -291,10 +292,26 @@ def _restore_epub(output: Path, images: tuple[FB2Image, ...], metadata: FB2Metad
         for image in images:
             candidates = [
                 item
-                for item in available
-                if item.get("media-type") == image.media_type
-                and image.id.lower() in PurePosixPath(item.get("href", "")).stem.lower()
+                for item in image_items
+                if item in available
+                and source.read((opf_directory / unquote(item.get("href", ""))).as_posix())
+                == image.data
             ]
+            if len(candidates) != 1:
+                candidates = [
+                    item
+                    for item in image_items
+                    if item in available
+                    and PurePosixPath(unquote(item.get("href", ""))).name == image.id
+                ]
+            if not candidates:
+                candidates = [
+                    item
+                    for item in image_items
+                    if item in available
+                    and PurePosixPath(unquote(item.get("href", ""))).stem
+                    in {image.id, PurePosixPath(image.id).stem}
+                ]
             if not candidates:
                 candidates = [
                     item for item in available if item.get("media-type") == image.media_type
@@ -359,8 +376,9 @@ class FB2Converter:
         binary = self.installer.find()
         images = fb2_images(source)
         metadata = fb2_metadata(source)
-        with tempfile.TemporaryDirectory(prefix="bookmerger-fbc-") as work_name:
-            work = Path(work_name)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="bookmerger-fbc-", dir=output.parent) as work_name:
+            work = Path(work_name).resolve()
             converted = work / "converted.epub"
             try:
                 completed = subprocess.run(

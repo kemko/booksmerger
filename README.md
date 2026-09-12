@@ -34,8 +34,8 @@ are needed. Later FB2 conversions reuse that cached binary, so they do not downl
 the converter again; source URLs still need network access for every build.
 
 Supported converter binaries are macOS, Linux, and Windows on amd64 and arm64.
-An unsupported platform, incompatible local converter, or unavailable download is
-reported before a collection is published.
+Incompatible PATH or cached converters are skipped; bookmerger installs the pinned
+release automatically. Unsupported platforms and installation failures stop the build.
 
 ## Output and limits
 
@@ -48,7 +48,9 @@ documents and their original links.
 Raster images are copied byte-for-byte. SVG remains SVG, including text and linked
 elements; only paths affected by moving resources are changed. Source styles,
 annotations, footnotes and return links, ordinary embedded fonts, media, language,
-and direction are retained. Collection styles apply only to new collection pages.
+and direction are retained. Required HTTP(S) resources, including nested CSS imports,
+are downloaded with the source limits and included for offline reading. External
+hyperlinks remain external. Collection styles apply only to new collection pages.
 
 Creators, translators, and other contributors are merged in first-seen order with
 their roles. Languages, subjects, and publisher data are retained. Work-specific
@@ -57,7 +59,8 @@ the collection does not claim a work's ISBN.
 
 Downloads are limited to 100 MiB per source. ZIP input is limited to 10,000 entries
 and 500 MiB expanded size. Catalog pages, authenticated sources, HTML, unsafe or
-ambiguous ZIPs, DRM, and obfuscated fonts are unsupported. A source error stops the
+ambiguous ZIPs, DRM, and obfuscated fonts are unsupported. Conflicting media-overlay
+settings that cannot apply to one collection are rejected. A source error stops the
 build and leaves an existing output unchanged. Bookmerger writes to a temporary file
 beside the requested output, validates it, then publishes it atomically. Existing
 outputs require `--overwrite` to be replaced.
@@ -80,3 +83,18 @@ Run it with:
 uv run pytest -q tests/test_readme_example.py
 ```
 
+
+## Development checks
+
+The full suite requires Java and [EPUBCheck 5.2.1](https://github.com/w3c/epubcheck/releases/tag/v5.2.1).
+Download and unpack its release ZIP, then set `EPUBCHECK` to the absolute path of
+`epubcheck.jar`. The pinned fbc is found or installed automatically.
+
+```sh
+FBC_INTEGRATION=1 EPUBCHECK=/absolute/path/epubcheck.jar uv run pytest --cov=bookmerger --cov-report=term-missing --cov-fail-under=80
+uv run ruff check .
+uv run ruff format --check .
+```
+
+Without `FBC_INTEGRATION` and `EPUBCHECK`, their external-tool checks are skipped.
+CI sets both variables and requires those checks to pass.

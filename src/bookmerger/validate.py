@@ -37,7 +37,7 @@ _MEDIA_TYPES = {
     ".woff2": "font/woff2",
     ".xhtml": "application/xhtml+xml",
 }
-_XML_SUFFIXES = {".ncx", ".opf", ".smil", ".svg", ".xhtml"}
+_XML_SUFFIXES = {".ncx", ".opf", ".smil", ".svg", ".xhtml", ".html"}
 _RASTER_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 
 
@@ -68,11 +68,11 @@ def _archive_path(document: str, value: str) -> tuple[str, str] | None:
         return None
     path = unquote(parts.path)
     if not path:
-        return document, parts.fragment
+        return document, unquote(parts.fragment)
     resolved = posixpath.normpath(posixpath.join(posixpath.dirname(document), path))
     if resolved in {".", ".."} or resolved.startswith("../") or resolved.startswith("/"):
         raise ValidationError(f"reference escapes EPUB: {value}")
-    return resolved, parts.fragment
+    return resolved, unquote(parts.fragment)
 
 
 def _check_reference(
@@ -197,6 +197,4 @@ def validate_epub(path: Path, source_directory: Path | None = None) -> None:
                     ):
                         raise ValidationError(f"image bytes changed: {name}")
     except (OSError, zipfile.BadZipFile, KeyError) as error:
-        if isinstance(error, ValidationError):
-            raise
         raise ValidationError(f"cannot validate EPUB {path}") from error

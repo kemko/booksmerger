@@ -7,7 +7,7 @@ from uuid import UUID
 from lxml import etree
 
 from bookmerger.collection import build_collection
-from bookmerger.epub import read_package, stage_epub
+from bookmerger.epub import stage_epub
 
 OPF = "http://www.idpf.org/2007/opf"
 DC = "http://purl.org/dc/elements/1.1/"
@@ -82,8 +82,25 @@ def test_builds_navigation_front_matter_and_merged_metadata(epub_factory, tmp_pa
     assert (directory / "EPUB" / "toc.xhtml").is_file()
 
 
-def test_source_navigation_is_retained_when_no_toc_tree(epub_factory, tmp_path: Path) -> None:
-    source = epub_factory(3)
-    package = read_package(source)
-    assert package.metadata.contributors[0].role == "aut"
-    assert package.cover == "images/cover.png"
+def test_source_navigation_is_retained_when_no_toc_tree(
+    epub_factory, edit_epub, tmp_path: Path
+) -> None:
+    source = edit_epub(
+        epub_factory(3),
+        {
+            "OEBPS/nav.xhtml": (
+                b'<html xmlns="http://www.w3.org/1999/xhtml"><head>'
+                b"<title>Original contents</title></head>"
+                b"<body><p>No TOC tree</p></body></html>"
+            )
+        },
+    )
+    directory = tmp_path / "staging"
+    book = stage_epub(source, directory, 1)
+    build_collection("Collection", (book,), directory)
+    nav = etree.parse(directory / "EPUB/nav.xhtml")
+    assert nav.xpath("//*[local-name()='a' and text()='Fixture 3']/@href") == ["book-0001.xhtml"]
+    assert nav.xpath("//*[local-name()='a' and text()='Original contents']/@href") == [
+        "../books/0001/OEBPS/nav.xhtml"
+    ]
+    assert b"No TOC tree" in (directory / "books/0001/OEBPS/nav.xhtml").read_bytes()
