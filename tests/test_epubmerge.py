@@ -146,6 +146,39 @@ def test_merge_rejects_prefixed_ncx_before_creating_output(
     assert not output.exists()
 
 
+def test_merge_rejects_ncx_in_another_directory_before_creating_output(
+    epub_factory, edit_epub, tmp_path: Path
+) -> None:
+    source = epub_factory(2)
+    with zipfile.ZipFile(source) as archive:
+        package = archive.read("OEBPS/content.opf").replace(
+            b' href="toc.ncx"', b' href="nav/toc.ncx"'
+        )
+        package = package.replace(
+            b"</manifest>",
+            b'<item id="decoy" href="../text/chapter.xhtml" '
+            b'media-type="application/xhtml+xml"/></manifest>',
+        )
+        ncx = archive.read("OEBPS/toc.ncx").replace(b'src="text/', b'src="../text/')
+    edit_epub(
+        source,
+        {
+            "OEBPS/content.opf": package,
+            "OEBPS/nav/toc.ncx": ncx,
+            # Both wrong targets exist, so output reference validation cannot detect misrouting.
+            "text/chapter.xhtml": (
+                b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Decoy</title></head>'
+                b'<body><p id="note">Wrong chapter and footnote</p></body></html>'
+            ),
+        },
+    )
+    output = tmp_path / "merged.epub"
+
+    with pytest.raises(MergeError, match="source 1: NCX must share the OPF directory"):
+        merge_epubs(output, (source,), "Collection")
+    assert not output.exists()
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [

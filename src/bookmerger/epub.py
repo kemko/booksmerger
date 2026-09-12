@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from lxml import etree
 
@@ -297,6 +297,9 @@ def _validate_ncx(
     if len(candidates) != 1:
         raise EpubError("EPUB must have exactly one NCX navigation document")
     _, ncx_path = candidates[0]
+    # The pinned engine resolves NCX targets relative to the OPF directory.
+    if PurePosixPath(ncx_path).parent != PurePosixPath(package.opf_path).parent:
+        raise EpubError("NCX must share the OPF directory for EpubMerge")
     root = _parse(archive.read(ncx_path), "invalid NCX navigation document")
     if root.tag != f"{{{NCX_NS}}}ncx":
         raise EpubError("invalid NCX navigation document")

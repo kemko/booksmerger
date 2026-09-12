@@ -4,7 +4,8 @@
 [EpubMerge](https://github.com/JimmXinu/EpubMerge) from ordered HTTP(S) links to FB2,
 EPUB 2/3, or a ZIP containing exactly one FB2 file, served directly or through
 redirects. FB2 is converted to EPUB 2 first. Every EPUB input must have exactly one
-valid NCX; EPUB 3 with an NCX is accepted, but nav-only EPUB 3 is rejected. Repeating
+valid NCX in the same archive directory as its OPF package document; EPUB 3 with
+such an NCX is accepted, but nav-only EPUB 3 is rejected. Repeating
 a link deliberately repeats that work in the collection. A Flibusta book link such as
 `https://flibusta.is/b/656901` (including a trailing slash) is requested as
 `https://flibusta.is/b/656901/download`. Other HTML pages are unsupported.
@@ -93,6 +94,9 @@ ambiguous ZIPs, DRM, obfuscated fonts, missing or ambiguous NCX documents,
 namespace-prefixed NCX elements, and NCX
 targets outside the EPUB are unsupported. A source error stops the build and leaves an
 existing output unchanged.
+NCX files outside the OPF directory are rejected because the pinned EpubMerge resolves
+their targets relative to the OPF. Supporting that layout requires an engine update
+and a navigation preservation regression.
 Bookmerger writes to a temporary file
 beside the requested output, validates it, then publishes it atomically. Existing
 outputs require `--overwrite` to be replaced.
