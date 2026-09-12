@@ -8,21 +8,23 @@ import pytest
 from bookmerger.cli import Command, main, output_filename, parse_args
 
 
-def test_positional_urls_keep_order_and_duplicates() -> None:
-    command = parse_args(["--title", " Collection ", "one", "two", "one"])
+def test_positional_flibusta_urls_keep_order_and_duplicates() -> None:
+    first = "https://flibusta.is/b/656901"
+    second = "https://flibusta.is/b/656902/"
+    command = parse_args(["--title", " Collection ", first, second, first])
 
-    assert command == Command("Collection", ("one", "two", "one"), False)
+    assert command == Command("Collection", (first, second, first), False)
 
 
-def test_input_file_keeps_order_and_duplicates(tmp_path: Path) -> None:
+def test_input_file_keeps_flibusta_urls_order_and_duplicates(tmp_path: Path) -> None:
     sources = tmp_path / "sources.txt"
-    sources.write_text(
-        "https://example.test/a.fb2\n\nhttps://example.test/a.fb2\n", encoding="utf-8"
-    )
+    first = "https://flibusta.is/b/656901"
+    second = "https://flibusta.is/b/656902/"
+    sources.write_text(f"{first}\n\n{second}\n{first}\n", encoding="utf-8")
 
     command = parse_args(["--title", "Collection", "--input-file", str(sources)])
 
-    assert command.sources == ("https://example.test/a.fb2", "https://example.test/a.fb2")
+    assert command.sources == (first, second, first)
 
 
 @pytest.mark.parametrize(

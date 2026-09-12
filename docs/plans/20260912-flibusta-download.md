@@ -69,16 +69,16 @@ hostname, завершающего слеша и параметров URL. Пр�
 
 - Modify: README.md
 - Modify: tests/test_cli.py
-- [ ] Уточнить в README.md, что обычные HTTP(S)-ссылки могут отдавать поддерживаемый файл
+- [x] Уточнить в README.md, что обычные HTTP(S)-ссылки могут отдавать поддерживаемый файл
 напрямую или через редирект. Добавить конкретный пример преобразования
 https://flibusta.is/b/656901 в https://flibusta.is/b/656901/download и поддержку завершающего слеша; остальные
 HTML-страницы остаются неподдерживаемыми.
-- [ ] Дополнить проверки позиционных аргументов и --input-file ссылкой Flibusta: CLI должен
+- [x] Дополнить проверки позиционных аргументов и --input-file ссылкой Flibusta: CLI должен
 передавать исходные ссылки с сохранением порядка и повторов.
-- [ ] Выполнить rtk proxy uv run pytest --cov=bookmerger --cov-report=term-missing --cov-fail-under=80.
-- [ ] При настроенных Java, EPUBCheck 5.2.1 и FBC_INTEGRATION=1 выполнить тот же набор с внешними
-проверками; иначе явно зафиксировать пропуски.
-- [ ] Выполнить rtk proxy uv run ruff check . и rtk proxy uv run ruff format --check .
+- [x] Выполнить rtk proxy uv run pytest --cov=bookmerger --cov-report=term-missing --cov-fail-under=80.
+- [x] При настроенных Java, EPUBCheck 5.2.1 и FBC_INTEGRATION=1 выполнить тот же набор с внешними
+проверками; иначе явно зафиксировать пропуски. Пропущено: FBC_INTEGRATION и EPUBCHECK не настроены.
+- [x] Выполнить rtk proxy uv run ruff check . и rtk proxy uv run ruff format --check .
 
 ## Post-Completion
 

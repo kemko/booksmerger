@@ -1,8 +1,10 @@
 # bookmerger
 
-`bookmerger` creates one EPUB 3.3 collection from ordered direct HTTP(S) links to FB2,
-EPUB 2/3, or a ZIP containing exactly one FB2 file. Repeating a link deliberately
-repeats that work in the collection.
+`bookmerger` creates one EPUB 3.3 collection from ordered HTTP(S) links to FB2, EPUB
+2/3, or a ZIP containing exactly one FB2 file, served directly or through redirects.
+Repeating a link deliberately repeats that work in the collection. A Flibusta book
+link such as `https://flibusta.is/b/656901` (including a trailing slash) is requested
+as `https://flibusta.is/b/656901/download`. Other HTML pages are unsupported.
 
 ## Installation
 
