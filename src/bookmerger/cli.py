@@ -149,20 +149,17 @@ def assemble(
     *,
     downloader: Downloader | None = None,
     converter: FB2Converter | None = None,
-    progress: Callable[[str], None] | None = None,
 ) -> Path:
     """Build and atomically publish one validated collection EPUB."""
     output = command.output
-    if output is not None:
-        _prepare_output(output, command.overwrite)
     downloader = downloader or Downloader()
     converter = converter or FB2Converter()
     temporary: Path | None = None
     try:
+        if output is not None:
+            _prepare_output(output, command.overwrite)
         with tempfile.TemporaryDirectory(prefix=".bookmerger-") as work_name:
             work = Path(work_name)
-            if progress:
-                progress("Downloading sources")
             sources = _stage(
                 "downloading sources",
                 lambda: downloader.download_all(command.sources, work / "sources"),
@@ -172,16 +169,12 @@ def assemble(
                 if source.format == "epub":
                     converted.append(source.path)
                     continue
-                if progress:
-                    progress(f"Converting book {number}")
                 target = work / "converted" / f"book-{number:04d}.epub"
                 _stage(
                     f"converting book {number}/{len(sources)}",
                     lambda source=source, target=target: converter.convert(source.path, target),
                 )
                 converted.append(target)
-            if progress:
-                progress("Building collection")
             staging = work / "staging"
             books = tuple(
                 _stage(
@@ -237,7 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = parse_args(argv)
     _configure_logging(command.verbose)
     try:
-        output = assemble(command, progress=LOGGER.info)
+        output = assemble(command)
     except BuildError as error:
         LOGGER.error("bookmerger: %s", error)
         return 1

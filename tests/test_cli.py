@@ -63,9 +63,9 @@ def test_output_filename_is_portable_and_keeps_utf8_boundaries(title: str, filen
 def test_main_reports_short_progress(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def fake_assemble(command: Command, *, progress, **_: object) -> Path:
+    def fake_assemble(command: Command) -> Path:
         assert command.title == "Collection"
-        progress("Downloading sources")
+        logging.getLogger("bookmerger.cli").info("Downloading sources")
         return command.output
 
     monkeypatch.setattr("bookmerger.cli.assemble", fake_assemble)
@@ -77,11 +77,24 @@ def test_main_reports_short_progress(
     assert "Downloading sources" in capsys.readouterr().err
 
 
+def test_main_reports_invalid_output_parent_before_downloading(tmp_path, capsys, monkeypatch):
+    parent = tmp_path / "file"
+    parent.write_bytes(b"existing file")
+    monkeypatch.setattr(
+        "bookmerger.cli.Downloader.download_all", lambda *args: pytest.fail("download started")
+    )
+    assert main(["--output", str(parent / "out.epub"), "https://example.test/book"]) == 1
+    diagnostic = capsys.readouterr().err
+    assert "bookmerger:" in diagnostic
+    assert "Traceback" not in diagnostic
+    assert parent.read_bytes() == b"existing file"
+
+
 def test_main_configures_one_handler_and_verbose_logging(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def fake_assemble(command: Command, *, progress, **_: object) -> Path:
-        progress("Downloading sources")
+    def fake_assemble(command: Command) -> Path:
+        logging.getLogger("bookmerger.cli").info("Downloading sources")
         return command.output
 
     monkeypatch.setattr("bookmerger.cli.assemble", fake_assemble)

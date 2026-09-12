@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import threading
 import time
 import zipfile
@@ -105,6 +106,32 @@ def test_rejects_archive_with_bad_hash(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr("bookmerger.converter.shutil.which", lambda _: None)
     with pytest.raises(FbcError, match="SHA-256"):
         FbcInstaller(tmp_path, lambda _: b"not the expected archive").find()
+
+
+def test_logs_timed_fbc_installation_and_selection(tmp_path, monkeypatch, caplog):
+    payload = fbc_archive("#!/usr/bin/env python3\nprint('fbc version 1.7.0')\n")
+    key = _platform_key()
+    asset = RELEASE.assets[key]
+    monkeypatch.setitem(
+        RELEASE.assets, key, type(asset)(asset.url, hashlib.sha256(payload).hexdigest())
+    )
+    monkeypatch.setattr("bookmerger.converter.shutil.which", lambda _: None)
+    installer = FbcInstaller(tmp_path / "cache", lambda _: payload)
+    logger = logging.getLogger("bookmerger.converter")
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="bookmerger.converter"):
+            binary = installer.find()
+            assert installer.find() == binary
+            monkeypatch.setattr("bookmerger.converter.shutil.which", lambda _: str(binary))
+            assert installer.find() == binary
+    finally:
+        logger.removeHandler(caplog.handler)
+    assert "Selecting fbc 1.7.0" in caplog.text
+    assert "Installing fbc 1.7.0" in caplog.text
+    assert "Installed fbc 1.7.0 in " in caplog.text
+    assert "Using cached fbc 1.7.0 in " in caplog.text
+    assert "Using fbc from PATH in " in caplog.text
 
 
 def test_rejects_unsafe_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

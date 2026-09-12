@@ -145,19 +145,23 @@ class FbcInstaller:
         self.fetch = fetch or self._download
 
     def find(self) -> Path:
+        started = time.monotonic()
+        LOGGER.info("Selecting fbc %s", RELEASE.version)
         path_binary = shutil.which("fbc")
         if path_binary:
             path = Path(path_binary)
             if self._compatible(path):
-                LOGGER.info("Using fbc from PATH")
+                LOGGER.info("Using fbc from PATH in %.2fs", time.monotonic() - started)
                 return path
         key = _platform_key()
         cached = self.cache_root / "fbc" / RELEASE.version / key / _binary_name()
         if cached.exists() and self._compatible(cached):
-            LOGGER.info("Using cached fbc %s", RELEASE.version)
+            LOGGER.info("Using cached fbc %s in %.2fs", RELEASE.version, time.monotonic() - started)
             return cached
         LOGGER.info("Installing fbc %s", RELEASE.version)
-        return self._install(cached, RELEASE.assets[key])
+        installed = self._install(cached, RELEASE.assets[key])
+        LOGGER.info("Installed fbc %s in %.2fs", RELEASE.version, time.monotonic() - started)
+        return installed
 
     @staticmethod
     def _compatible(binary: Path) -> bool:

@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import lzma
 import os
 import re
 import stat
+import time
 import warnings
 import zipfile
+import zlib
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -65,7 +68,7 @@ def _safe_url(url: str) -> str:
 def _safe_detail(detail: object) -> str:
     """Remove URLs, including credentials and query strings, from diagnostic text."""
     return re.sub(
-        r"(?:https?|ftp)://[^\s'\")>]+",
+        r"(?i)(?:https?|ftp)://\S+",
         lambda match: _safe_url(match.group()),
         str(detail),
     )
@@ -171,12 +174,21 @@ def _classify(data: bytes, url: str, limits: DownloadLimits) -> tuple[str, bytes
                 and "META-INF/container.xml" in names
             ):
                 _xml_root(archive.read("META-INF/container.xml"), url)
+                if archive.testzip() is not None:
+                    raise _error(url, "invalid ZIP archive")
                 return "epub", data
             if len(files) == 1:
                 extracted = archive.read(files[0])
                 if _is_fb2(extracted, url):
                     return "fb2", extracted
-    except (OSError, zipfile.BadZipFile, RuntimeError) as error:
+    except (
+        OSError,
+        zipfile.BadZipFile,
+        RuntimeError,
+        EOFError,
+        zlib.error,
+        lzma.LZMAError,
+    ) as error:
         if isinstance(error, DownloadError):
             raise
         raise _error(url, "invalid ZIP archive") from error
@@ -227,11 +239,18 @@ class Downloader:
         try:
             total = len(urls)
             for index, url in enumerate(urls, 1):
+                started = time.monotonic()
                 LOGGER.info("Downloading book %d/%d: %s", index, total, _safe_url(url))
                 try:
                     downloaded.append(self.download(url, directory, index))
                 except DownloadError as error:
                     raise DownloadError(f"book {index}/{total}: {error}") from error
+                LOGGER.info(
+                    "Finished downloading book %d/%d in %.2fs",
+                    index,
+                    total,
+                    time.monotonic() - started,
+                )
             return tuple(downloaded)
         except Exception:
             for source in downloaded:
@@ -262,12 +281,12 @@ class Downloader:
             output.write_bytes(contents)
             LOGGER.info("Downloaded book %d: %s, %d bytes", index, format_name, len(contents))
             return DownloadedSource(url, output, format_name)
-        except OSError as error:
-            detail = _safe_detail(error) or type(error).__name__
-            raise _error(url, f"file operation failed: {detail}") from error
-        except Exception:
+        except Exception as error:
             if output is not None:
                 output.unlink(missing_ok=True)
+            if isinstance(error, OSError):
+                detail = _safe_detail(error) or type(error).__name__
+                raise _error(url, f"file operation failed: {detail}") from error
             raise
         finally:
             temporary.unlink(missing_ok=True)
@@ -279,13 +298,16 @@ class Downloader:
 
     def _warn_cache(self, url: str, error: OSError) -> None:
         warnings.warn(
-            f"cannot use source cache for {_safe_url(url)}: {error}", RuntimeWarning, stacklevel=3
+            f"cannot use source cache for {_safe_url(url)}: {_safe_detail(error)}",
+            RuntimeWarning,
+            stacklevel=3,
         )
 
     def _read_cache(self, url: str) -> tuple[str, bytes] | None:
         path = self._cache_path(url)
         try:
-            data = path.read_bytes()
+            with path.open("rb") as cached:
+                data = cached.read(self.limits.max_download_bytes + 1)
         except FileNotFoundError:
             return None
         except OSError as error:
@@ -317,9 +339,18 @@ class Downloader:
             self._warn_cache(url, error)
         finally:
             if temporary is not None:
-                temporary.unlink(missing_ok=True)
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError as error:
+                    self._warn_cache(url, error)
 
     def _fetch(self, url: str, temporary: Path) -> tuple[bytes, str, str]:
+        LOGGER.debug(
+            "Fetching %s (download limit %d bytes, retries %d)",
+            _safe_url(url),
+            self.limits.max_download_bytes,
+            self.retries,
+        )
         owns_client = self.client is None
         client = self.client or httpx.Client(
             verify=True,
@@ -349,19 +380,12 @@ class Downloader:
                             if declared_size > self.limits.max_download_bytes:
                                 raise _error(url, "download exceeds the allowed size")
                         size = 0
-                        try:
-                            with temporary.open("wb") as target:
-                                for chunk in response.iter_bytes():
-                                    size += len(chunk)
-                                    if size > self.limits.max_download_bytes:
-                                        raise _error(url, "download exceeds the allowed size")
-                                    target.write(chunk)
-                        except OSError as error:
-                            detail = _safe_detail(error) or type(error).__name__
-                            raise _error(
-                                url,
-                                f"file operation failed: {detail}",
-                            ) from error
+                        with temporary.open("wb") as target:
+                            for chunk in response.iter_bytes():
+                                size += len(chunk)
+                                if size > self.limits.max_download_bytes:
+                                    raise _error(url, "download exceeds the allowed size")
+                                target.write(chunk)
                     return (
                         temporary.read_bytes(),
                         response.headers.get("content-type", "").split(";", 1)[0].strip(),

@@ -74,7 +74,7 @@ def generated_title(books: tuple[StagedBook, ...]) -> str:
         [
             book.package.metadata.title
             for book in books
-            if _normal(book.package.metadata.title) != "untitled"
+            if not book.package.metadata.title_is_fallback
         ]
     )
 

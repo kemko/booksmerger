@@ -108,6 +108,7 @@ class BookMetadata:
     identifiers: tuple[str, ...]
     rights: tuple[str, ...]
     details: tuple[tuple[str, str], ...]
+    title_is_fallback: bool = False
 
 
 @dataclass(frozen=True)
@@ -205,6 +206,7 @@ def _metadata(root: etree._Element) -> BookMetadata:
         _text_items(node, "identifier"),
         _text_items(node, "rights"),
         details,
+        title_is_fallback=not titles,
     )
 
 

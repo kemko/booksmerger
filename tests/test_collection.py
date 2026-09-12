@@ -32,10 +32,25 @@ def test_generated_title_uses_unique_authors_and_source_titles() -> None:
 
 
 def test_generated_title_without_meaningful_metadata_is_collection() -> None:
-    metadata = BookMetadata("Untitled", (), (), (), None, (), (), ())
+    metadata = BookMetadata("Untitled", (), (), (), None, (), (), (), title_is_fallback=True)
     book = StagedBook(1, "", EpubPackage("", (), (), (), metadata, None), {})
 
     assert generated_title((book,)) == "Сборник"
+
+
+def test_generated_title_preserves_explicit_untitled():
+    from bookmerger.epub import _metadata
+
+    for element, expected in [
+        ("<dc:title>Untitled</dc:title>", "Сборник — Untitled"),
+        ("", "Сборник"),
+    ]:
+        root = etree.fromstring(
+            f'<package xmlns="{OPF}"><metadata xmlns:dc="{DC}">{element}</metadata></package>'
+        )
+        metadata = _metadata(root)
+        book = StagedBook(1, "", EpubPackage("", (), (), (), metadata, None), {})
+        assert generated_title((book,)) == expected
 
 
 def test_builds_navigation_front_matter_and_merged_metadata(epub_factory, tmp_path: Path) -> None:

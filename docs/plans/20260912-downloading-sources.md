@@ -163,7 +163,8 @@ Files:
   output и удаляют временные файлы.
 - [x] Выполнить полный набор: rtk proxy env FBC_INTEGRATION=1 EPUBCHECK=/absolute/path/epubcheck.jar uv run pytest --cov=bookmerger
   --cov-report=term-missing --cov-fail-under=80. Подставить фактический путь к EPUBCheck; обеспечить наличие fbc
-  и Java. EPUBCheck не установлен локально (skipped - not automatable); fbc/Java-проверка без EPUBCheck: 135 passed, 1 skipped, coverage 89.54%.
+  и Java. При ревью полный набор выполнен с локальными fbc и EPUBCheck 5.2.1:
+  146 passed без пропусков, coverage 90.33% после исправлений ревью.
 - [x] Выполнить rtk proxy uv run ruff check . и rtk proxy uv run ruff format --check .; подтвердить покрытие не ниже
   80%.
 

@@ -133,19 +133,50 @@ def test_reports_http_status_and_retries_transient_responses(
 
 
 @pytest.mark.parametrize(
-    "detail", ["", "connection to https://user:pass@example.test/?token=secret failed"]
+    "detail",
+    [
+        "",
+        "connection to https://user:pass@example.test/?token=secret failed",
+        "connection to https://user:pass'word@example.test/?token=secret failed",
+        "connection to HTTPS://user:password@example.test/?token=secret failed",
+    ],
 )
-def test_reports_network_error_without_secrets(tmp_path: Path, detail: str) -> None:
+def test_reports_network_error_without_secrets(tmp_path: Path, detail: str, caplog) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(detail, request=request)
 
-    with pytest.raises(DownloadError, match=r"network error \(ConnectError\)") as error:
-        Downloader(client=client(httpx.MockTransport(handler))).download(
-            "https://user:pass@example.test/book?token=secret", tmp_path
-        )
+    logger = logging.getLogger("bookmerger.download")
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="bookmerger.download"):
+            with pytest.raises(DownloadError, match=r"network error \(ConnectError\)") as error:
+                Downloader(client=client(httpx.MockTransport(handler))).download(
+                    "https://user:pass@example.test/book?token=secret", tmp_path
+                )
+    finally:
+        logger.removeHandler(caplog.handler)
 
     assert "pass" not in str(error.value)
     assert "secret" not in str(error.value)
+    assert "pass" not in caplog.text
+    assert "secret" not in caplog.text
+    assert "Retry 1/2" in caplog.text
+    assert "DEBUG" in caplog.text
+
+
+def test_download_logs_completion_with_each_book_number_and_duration(tmp_path, caplog):
+    downloader = Downloader(client=client(httpx.MockTransport(lambda req: response(req, FB2))))
+    logger = logging.getLogger("bookmerger.download")
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="bookmerger.download"):
+            downloader.download_all(["https://example.test/book"] * 2, tmp_path / "work")
+    finally:
+        logger.removeHandler(caplog.handler)
+    for number in (1, 2):
+        assert f"Downloading book {number}/2:" in caplog.text
+        assert f"Finished downloading book {number}/2 in " in caplog.text
+    assert "Fetching" not in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -210,6 +241,7 @@ def test_rejects_invalid_content_length_and_reports_file_errors(
 
     def fail_output(path: Path, data: bytes) -> int:
         if path.name == "source-0001.fb2":
+            original(path, data[:10])
             raise OSError("disk full")
         return original(path, data)
 
@@ -219,6 +251,7 @@ def test_rejects_invalid_content_length_and_reports_file_errors(
             client=client(httpx.MockTransport(lambda request: response(request, FB2)))
         )
         downloader.download("https://example.test/book", tmp_path / "full")
+    assert not list((tmp_path / "full").iterdir())
 
 
 def test_reuses_validated_source_cache_across_downloaders_and_positions(tmp_path: Path) -> None:
@@ -346,6 +379,83 @@ def test_failed_cache_publication_leaves_no_entry(
 
     assert result.path.read_bytes() == FB2
     assert not list(cache.iterdir())
+
+
+def test_failed_cache_cleanup_does_not_abort_download(tmp_path: Path, monkeypatch) -> None:
+    cache = tmp_path / "cache"
+    downloader = Downloader(
+        client=client(httpx.MockTransport(lambda request: response(request, FB2))),
+        cache_directory=cache,
+    )
+    original_unlink = Path.unlink
+
+    def fail_replace(*args):
+        raise PermissionError("cache publication denied")
+
+    def fail_cleanup(path, *args, **kwargs):
+        if path.parent == cache:
+            raise PermissionError("cache cleanup denied")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr("bookmerger.download.os.replace", fail_replace)
+    monkeypatch.setattr(Path, "unlink", fail_cleanup)
+    with pytest.warns(RuntimeWarning, match="cannot use source cache"):
+        result = downloader.download("https://example.test/book", tmp_path / "work")
+    assert result.path.read_bytes() == FB2
+
+
+def test_cache_reads_are_bounded(tmp_path: Path, monkeypatch) -> None:
+    downloader = Downloader(limits=DownloadLimits(max_download_bytes=len(FB2)))
+    path = downloader._cache_path("https://example.test/book")
+    path.parent.mkdir(parents=True)
+    path.write_bytes(FB2 + b" " * 100)
+    original_open = Path.open
+    reads = []
+
+    class BoundedReader(io.BytesIO):
+        def read(self, size=-1):
+            reads.append(size)
+            assert 0 <= size <= len(FB2) + 1
+            return super().read(size)
+
+    def open_cache(target, *args, **kwargs):
+        if target == path:
+            return BoundedReader(FB2 + b" " * 100)
+        return original_open(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_cache)
+    assert downloader._read_cache("https://example.test/book") is None
+    assert reads == [len(FB2) + 1]
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("compression", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_corrupt_cached_epub_member_is_downloaded_again(tmp_path: Path, compression) -> None:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w", compression=compression) as bundle:
+        bundle.writestr("mimetype", b"application/epub+zip")
+        bundle.writestr("META-INF/container.xml", b"<container/>")
+        bundle.writestr("chapter.xhtml", b"<html>Chapter</html>")
+    valid = payload.getvalue()
+    with zipfile.ZipFile(io.BytesIO(valid)) as bundle:
+        info = bundle.getinfo("chapter.xhtml")
+        offset = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+    corrupt = bytearray(valid)
+    corrupt[offset] = 7  # Invalid DEFLATE block or a stored member CRC mismatch.
+    requested = []
+
+    def handler(request):
+        requested.append(request.url)
+        return response(request, valid)
+
+    downloader = Downloader(client=client(httpx.MockTransport(handler)))
+    url = "https://example.test/book"
+    path = downloader._cache_path(url)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(corrupt)
+    assert downloader.download(url, tmp_path / "work").path.read_bytes() == valid
+    assert len(requested) == 1
+    assert path.read_bytes() == valid
 
 
 def test_cache_errors_warn_and_later_download_failure_keeps_cached_source(tmp_path: Path) -> None:
