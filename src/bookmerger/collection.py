@@ -60,6 +60,32 @@ def merged_contributors(books: tuple[StagedBook, ...]) -> tuple[Contributor, ...
     return tuple(result)
 
 
+def generated_title(books: tuple[StagedBook, ...]) -> str:
+    """Derive a concise collection title from staged source metadata."""
+    authors = _unique(
+        [
+            person.name
+            for book in books
+            for person in book.package.metadata.contributors
+            if person.role.casefold() == "aut"
+        ]
+    )
+    works = _unique(
+        [
+            book.package.metadata.title
+            for book in books
+            if _normal(book.package.metadata.title) != "untitled"
+        ]
+    )
+
+    def summary(values: tuple[str, ...]) -> str:
+        if len(values) <= 2:
+            return ", ".join(values)
+        return f"{values[0]}, {values[1]} и др."
+
+    return " — ".join(part for part in ("Сборник", summary(authors), summary(works)) if part)
+
+
 def _navigation(
     book: StagedBook, directory: Path, nav_type: str = "toc"
 ) -> list[tuple[str, str, list[object], str]]:
@@ -230,9 +256,10 @@ def _unique(values: list[str]) -> tuple[str, ...]:
     result: list[str] = []
     seen: set[str] = set()
     for value in values:
-        if value and _normal(value) not in seen:
-            seen.add(_normal(value))
-            result.append(value)
+        cleaned = " ".join(value.split())
+        if cleaned and _normal(cleaned) not in seen:
+            seen.add(_normal(cleaned))
+            result.append(cleaned)
     return tuple(result)
 
 
@@ -262,7 +289,7 @@ def build_collection(
     title_root, title_body = _xhtml(title)
     title_body.set("class", "title-page")
     etree.SubElement(title_body, f"{{{XHTML_NS}}}h1").text = title
-    etree.SubElement(title_body, f"{{{XHTML_NS}}}p").text = f"Collection, {published.isoformat()}"
+    etree.SubElement(title_body, f"{{{XHTML_NS}}}p").text = f"Сборник, {published.isoformat()}"
     _write_xhtml(epub / "title.xhtml", title_root)
     bibliography_root, bibliography_body = _xhtml("Bibliography")
     bibliography_body.set("class", "bibliography")

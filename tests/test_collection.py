@@ -6,13 +6,36 @@ from uuid import UUID
 
 from lxml import etree
 
-from bookmerger.collection import build_collection
-from bookmerger.epub import stage_epub
+from bookmerger.collection import build_collection, generated_title
+from bookmerger.epub import BookMetadata, Contributor, EpubPackage, StagedBook, stage_epub
 
 OPF = "http://www.idpf.org/2007/opf"
 DC = "http://purl.org/dc/elements/1.1/"
 XHTML = "http://www.w3.org/1999/xhtml"
 EPUB = "http://www.idpf.org/2007/ops"
+
+
+def test_generated_title_uses_unique_authors_and_source_titles() -> None:
+    def book(number: int, title: str, contributors: tuple[Contributor, ...]) -> StagedBook:
+        metadata = BookMetadata(title, contributors, (), (), None, (), (), ())
+        return StagedBook(number, "", EpubPackage("", (), (), (), metadata, None), {})
+
+    books = (
+        book(1, " Work ", (Contributor(" Author ", "aut"), Contributor("Editor", "edt"))),
+        book(2, "work", (Contributor("author", "AUT"), Contributor("Translator", "trl"))),
+        book(3, "Third", (Contributor("Second", "aut"),)),
+        book(4, "Fourth", (Contributor("Third", "aut"),)),
+        book(5, "Untitled", ()),
+    )
+
+    assert generated_title(books) == "Сборник — Author, Second и др. — Work, Third и др."
+
+
+def test_generated_title_without_meaningful_metadata_is_collection() -> None:
+    metadata = BookMetadata("Untitled", (), (), (), None, (), (), ())
+    book = StagedBook(1, "", EpubPackage("", (), (), (), metadata, None), {})
+
+    assert generated_title((book,)) == "Сборник"
 
 
 def test_builds_navigation_front_matter_and_merged_metadata(epub_factory, tmp_path: Path) -> None:
@@ -80,6 +103,7 @@ def test_builds_navigation_front_matter_and_merged_metadata(epub_factory, tmp_pa
         == 1.0
     )
     assert (directory / "EPUB" / "toc.xhtml").is_file()
+    assert "Сборник," in (directory / "EPUB" / "title.xhtml").read_text()
 
 
 def test_source_navigation_is_retained_when_no_toc_tree(

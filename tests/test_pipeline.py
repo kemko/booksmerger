@@ -53,10 +53,57 @@ def test_pipeline_keeps_existing_output_when_validation_fails(
     assert not list(tmp_path.glob(".collection-*.epub"))
 
 
+def test_pipeline_generates_title_and_output_after_staging(
+    epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    command = Command(None, None, ("one", "two"), False)
+
+    output = assemble(command, downloader=LocalDownloader((epub_factory(2), epub_factory(3))))
+
+    assert output == tmp_path / "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3.epub"
+    with zipfile.ZipFile(output) as archive:
+        package = archive.read("EPUB/package.opf").decode()
+        title_page = archive.read("EPUB/title.xhtml").decode()
+    assert "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3" in package
+    assert "Сборник — Author 2, Author 3 — Fixture 2, Fixture 3" in title_page
+
+
+def test_pipeline_uses_generated_title_with_explicit_output(epub_factory, tmp_path: Path) -> None:
+    output = tmp_path / "result.epub"
+
+    assemble(Command(None, output, ("one",), False), downloader=LocalDownloader((epub_factory(3),)))
+
+    with zipfile.ZipFile(output) as archive:
+        assert "Сборник — Author 3 — Fixture 3" in archive.read("EPUB/package.opf").decode()
+
+
+def test_pipeline_preserves_racing_output(
+    epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "result.epub"
+    original_link = os.link
+
+    def racing_link(source: Path, target: Path) -> None:
+        output.write_bytes(b"racing result")
+        original_link(source, target)
+
+    monkeypatch.setattr("bookmerger.cli.os.link", racing_link)
+
+    with pytest.raises(BuildError, match="already exists"):
+        assemble(
+            Command("Collection", output, ("one",), False),
+            downloader=LocalDownloader((epub_factory(3),)),
+        )
+
+    assert output.read_bytes() == b"racing result"
+    assert not list(tmp_path.glob(".result-*.epub"))
+
+
 @pytest.mark.skipif(not os.environ.get("FBC_INTEGRATION"), reason="requires pinned fbc")
 def test_mixed_fb2_and_epub_uses_pinned_converter(epub_factory, rich_fb2, tmp_path: Path) -> None:
     output = tmp_path / "collection.epub"
-    command = Command("Collection", output, ("fb2", "epub2", "epub3"), False)
+    command = Command(None, output, ("fb2", "epub2", "epub3"), False)
     sources = (
         rich_fb2,
         epub_factory(2),
@@ -90,6 +137,7 @@ def test_mixed_fb2_and_epub_uses_pinned_converter(epub_factory, rich_fb2, tmp_pa
             and archive.read(name).startswith(b"\x89PNG\r\n\x1a\n")
         ]
     assert b"Translator Trudy" in package
+    assert b"\xd0\xa1\xd0\xb1\xd0\xbe\xd1\x80\xd0\xbd\xd0\xb8\xd0\xba" in package
     assert b"FB2 fixture" in nav and b"Fixture 2" in nav and b"Fixture 3" in nav
     assert b"Chapter" in first_book_text and images
 

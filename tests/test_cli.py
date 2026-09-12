@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from bookmerger.cli import Command, main, parse_args
+from bookmerger.cli import Command, main, output_filename, parse_args
 
 
 def test_positional_urls_keep_order_and_duplicates() -> None:
@@ -27,6 +27,37 @@ def test_input_file_keeps_order_and_duplicates(tmp_path: Path) -> None:
     )
 
     assert command.sources == ("https://example.test/a.fb2", "https://example.test/a.fb2")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "title", "output"),
+    [
+        (["--title", "Title", "--output", "out.epub", "url"], "Title", Path("out.epub")),
+        (["--title", "Title", "url"], "Title", None),
+        (["--output", "out.epub", "url"], None, Path("out.epub")),
+        (["url"], None, None),
+    ],
+)
+def test_title_and_output_are_independently_optional(
+    arguments: list[str], title: str | None, output: Path | None
+) -> None:
+    command = parse_args(arguments)
+
+    assert (command.title, command.output) == (title, output)
+
+
+@pytest.mark.parametrize(
+    ("title", "filename"),
+    [
+        ("Сборник — Автор", "Сборник — Автор.epub"),
+        (" ../CON. ", "Сборник.epub"),
+        ("con .txt", "Сборник.epub"),
+        ("a/b\\c:*?", "a b c.epub"),
+        ("я" * 150, "я" * 100 + ".epub"),
+    ],
+)
+def test_output_filename_is_portable_and_keeps_utf8_boundaries(title: str, filename: str) -> None:
+    assert output_filename(title) == filename
 
 
 def test_main_reports_short_progress(

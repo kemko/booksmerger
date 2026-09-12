@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
-from bookmerger.collection import build_collection
+from bookmerger.collection import build_collection, generated_title
 from bookmerger.converter import FB2Converter
 from bookmerger.download import Downloader, _safe_detail
 from bookmerger.epub import stage_epub, write_epub
@@ -24,8 +24,8 @@ from bookmerger.validate import validate_epub
 class Command:
     """Validated command-line input for a collection build."""
 
-    title: str
-    output: Path
+    title: str | None
+    output: Path | None
     sources: tuple[str, ...]
     overwrite: bool
     verbose: bool = False
@@ -49,8 +49,8 @@ class _Stderr:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create one EPUB from FB2 and EPUB URLs.")
-    parser.add_argument("--title", required=True, help="Collection title")
-    parser.add_argument("--output", required=True, type=Path, help="Output EPUB path")
+    parser.add_argument("--title", help="Collection title")
+    parser.add_argument("--output", type=Path, help="Output EPUB path")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing output file")
     parser.add_argument("--verbose", action="store_true", help="Show debug diagnostics")
     sources = parser.add_mutually_exclusive_group(required=True)
@@ -70,8 +70,8 @@ def _sources_from_file(path: Path) -> tuple[str, ...]:
 def parse_args(argv: Sequence[str] | None = None) -> Command:
     parser = build_parser()
     namespace = parser.parse_args(argv)
-    title = namespace.title.strip()
-    if not title:
+    title = namespace.title.strip() if namespace.title is not None else None
+    if namespace.title is not None and not title:
         parser.error("--title must not be empty")
     try:
         sources = (
@@ -84,6 +84,31 @@ def parse_args(argv: Sequence[str] | None = None) -> Command:
     if not sources:
         parser.error("provide at least one URL")
     return Command(title, namespace.output, sources, namespace.overwrite, namespace.verbose)
+
+
+_FORBIDDEN_FILENAME_CHARACTERS = '<>:"/\\|?*'
+_RESERVED_FILENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
+_MAX_OUTPUT_STEM_BYTES = 200
+
+
+def output_filename(title: str) -> str:
+    """Return a portable EPUB filename without shortening the embedded title."""
+    stem = "".join(
+        " " if character in _FORBIDDEN_FILENAME_CHARACTERS or ord(character) < 32 else character
+        for character in title
+    ).strip(". ")
+    if not stem or stem.split(".", 1)[0].rstrip(" ").upper() in _RESERVED_FILENAMES:
+        stem = "Сборник"
+    encoded = stem.encode("utf-8")[:_MAX_OUTPUT_STEM_BYTES]
+    stem = encoded.decode("utf-8", errors="ignore").rstrip(". ") or "Сборник"
+    return f"{stem}.epub"
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -113,6 +138,12 @@ def _stage(name: str, operation: Callable[[], T]) -> T:
     return result
 
 
+def _prepare_output(output: Path, overwrite: bool) -> None:
+    if output.exists() and not overwrite:
+        raise BuildError(f"output already exists: {output} (use --overwrite to replace it)")
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+
 def assemble(
     command: Command,
     *,
@@ -122,14 +153,13 @@ def assemble(
 ) -> Path:
     """Build and atomically publish one validated collection EPUB."""
     output = command.output
-    if output.exists() and not command.overwrite:
-        raise BuildError(f"output already exists: {output} (use --overwrite to replace it)")
-    output.parent.mkdir(parents=True, exist_ok=True)
+    if output is not None:
+        _prepare_output(output, command.overwrite)
     downloader = downloader or Downloader()
     converter = converter or FB2Converter()
     temporary: Path | None = None
     try:
-        with tempfile.TemporaryDirectory(prefix=f".{output.stem}-", dir=output.parent) as work_name:
+        with tempfile.TemporaryDirectory(prefix=".bookmerger-") as work_name:
             work = Path(work_name)
             if progress:
                 progress("Downloading sources")
@@ -162,7 +192,12 @@ def assemble(
                 )
                 for number, source in enumerate(converted, 1)
             )
-            title = _stage("determining collection title", lambda: command.title)
+            title = _stage(
+                "determining collection title", lambda: command.title or generated_title(books)
+            )
+            if output is None:
+                output = Path.cwd() / output_filename(title)
+            _prepare_output(output, command.overwrite)
             _stage("building collection", lambda: build_collection(title, books, staging))
             descriptor, temp_name = tempfile.mkstemp(
                 prefix=f".{output.stem}-", suffix=".epub", dir=output.parent
@@ -193,6 +228,7 @@ def assemble(
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+    assert output is not None
     return output
 
 
@@ -201,9 +237,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = parse_args(argv)
     _configure_logging(command.verbose)
     try:
-        assemble(command, progress=LOGGER.info)
+        output = assemble(command, progress=LOGGER.info)
     except BuildError as error:
         LOGGER.error("bookmerger: %s", error)
         return 1
-    LOGGER.info("Saved EPUB: %s", command.output)
+    LOGGER.info("Saved EPUB: %s", output)
     return 0
