@@ -336,3 +336,6 @@ def _validate_ncx(
             raise EpubError("NCX refers to a missing or external resource")
         if urlsplit(src).path.startswith("/"):
             raise EpubError("root-relative NCX targets are unsupported by EpubMerge")
+        # The pinned engine normalizes the whole URI as a path, including its suffix.
+        if "/" in target[1] or "/" in target[2]:
+            raise EpubError("slashes in NCX queries or fragments are unsupported by EpubMerge")

@@ -100,6 +100,9 @@ and a navigation preservation regression.
 Root-relative manifest paths and NCX targets are also rejected: the pinned engine
 interprets them relative to the OPF directory and can select a different chapter.
 Supporting them requires an engine fix and a resource-target preservation regression.
+NCX targets with slashes in their query or fragment are rejected because the engine
+normalizes the whole URI as a path and can redirect navigation to another chapter.
+Supporting these suffixes requires an engine fix and a navigation preservation regression.
 Percent-encoded NCX manifest paths are also rejected: the engine reads them without
 decoding and can select a different archive entry. Supporting them requires an engine
 fix and a regression proving that the validated NCX supplies the merged navigation.

@@ -205,6 +205,41 @@ def test_merge_rejects_root_relative_targets_before_creating_output(
     assert not output.exists()
 
 
+@pytest.mark.parametrize("suffix", ["?redirect=/../appendix.xhtml", "#section/../appendix.xhtml"])
+def test_merge_rejects_ncx_suffixes_that_redirect_navigation(
+    epub_factory, edit_epub, tmp_path: Path, suffix: str
+) -> None:
+    source = epub_factory(2)
+    with zipfile.ZipFile(source) as archive:
+        ncx = archive.read("OEBPS/toc.ncx").replace(
+            b'src="text/chapter.xhtml"', f'src="text/chapter.xhtml{suffix}"'.encode()
+        )
+    edit_epub(source, {"OEBPS/toc.ncx": ncx})
+    output = tmp_path / "merged.epub"
+
+    with pytest.raises(MergeError, match="source 1: slashes in NCX queries or fragments"):
+        merge_epubs(output, (source,), "Collection")
+    assert not output.exists()
+
+
+def test_merge_preserves_ncx_query_and_fragment(epub_factory, edit_epub, tmp_path: Path) -> None:
+    source = epub_factory(2)
+    target = "text/chapter.xhtml?edition=1#note"
+    with zipfile.ZipFile(source) as archive:
+        ncx = archive.read("OEBPS/toc.ncx").replace(
+            b'src="text/chapter.xhtml"', f'src="{target}"'.encode()
+        )
+    edit_epub(source, {"OEBPS/toc.ncx": ncx})
+    output = tmp_path / "merged.epub"
+
+    merge_epubs(output, (source,), "Collection")
+    validate_epub(output)
+
+    with zipfile.ZipFile(output) as archive:
+        root = etree.fromstring(archive.read("toc.ncx"))
+    assert f"1/OEBPS/{target}" in root.xpath("//ncx:content/@src", namespaces={"ncx": NCX_NS})
+
+
 @pytest.mark.parametrize("resource", ["toc name.ncx", "оглавление.ncx"])
 def test_merge_rejects_encoded_ncx_path_before_using_unvalidated_navigation(
     epub_factory, edit_epub, tmp_path: Path, resource: str
