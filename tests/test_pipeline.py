@@ -96,6 +96,49 @@ def test_pipeline_uses_supplied_title_for_output_and_epub(
         assert title in archive.read("EPUB/title.xhtml").decode()
 
 
+def test_pipeline_keeps_full_unsafe_long_title_inside_epub(
+    epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    title = f"Сборник: {'Ё' * 100}"
+    monkeypatch.chdir(tmp_path)
+
+    output = assemble(
+        Command(title, ("one",), False), downloader=LocalDownloader((epub_factory(3),))
+    )
+
+    assert output.name == "Сборник  " + "Ё" * 92 + ".epub"
+    assert len(output.stem.encode()) <= 200
+    with zipfile.ZipFile(output) as archive:
+        assert title in archive.read("EPUB/package.opf").decode()
+        assert title in archive.read("EPUB/title.xhtml").decode()
+
+
+@pytest.mark.parametrize(
+    ("title", "filename"),
+    [
+        ("Collection title", "Collection title.epub"),
+        (None, "Сборник — Author 3 — Fixture 3.epub"),
+    ],
+)
+def test_pipeline_replaces_existing_output_only_with_overwrite(
+    title: str | None, filename: str, epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output = tmp_path / filename
+    output.write_bytes(b"old result")
+    monkeypatch.chdir(tmp_path)
+    command = Command(title, ("one",), False)
+
+    with pytest.raises(BuildError, match="already exists"):
+        assemble(command, downloader=LocalDownloader((epub_factory(3),)))
+    assert output.read_bytes() == b"old result"
+
+    assert (
+        assemble(Command(title, ("one",), True), downloader=LocalDownloader((epub_factory(3),)))
+        == output
+    )
+    assert output.read_bytes() != b"old result"
+
+
 def test_pipeline_preserves_racing_output(
     epub_factory, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -272,7 +315,7 @@ def test_mixed_fb2_and_epub_uses_pinned_converter(
             and archive.read(name).startswith(b"\x89PNG\r\n\x1a\n")
         ]
     assert b"Translator Trudy" in package
-    assert b"\xd0\xa1\xd0\xb1\xd0\xbe\xd1\x80\xd0\xbd\xd0\xb8\xd0\xba" in package
+    assert b">collection<" in package
     assert b"FB2 fixture" in nav and b"Fixture 2" in nav and b"Fixture 3" in nav
     assert b"Chapter" in first_book_text and images
 
